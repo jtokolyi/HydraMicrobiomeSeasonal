@@ -1,0 +1,1863 @@
+---
+title: "Seasonal variation in the hydra microbiome"
+output:
+  html_document:
+    df_print: paged
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r message=FALSE, warning=FALSE}
+library(phyloseq); library(ggplot2); library(metagMisc); library(fantaxtic);
+library(ANCOMBC); library(pairwiseAdonis); library(dplyr); library(microViz);
+
+rm(list=ls())
+load("seasonal_phyloseq.Rdata")
+tre=ape::read.tree("/storage/microbiome/seasonal_2024/full_tree_midpointRooted.tre")
+phy_tree(ps_seasonal) <- tre
+
+ps_seasonal <- subset_taxa(ps_seasonal, (Order!="Chloroplast")|(!is.na(Class)))
+ps_seasonal <- subset_taxa(ps_seasonal, (Genus!="unidentified_Chloroplast")|is.na(Genus))
+ps_seasonal <- subset_taxa(ps_seasonal, (Genus!="unidentified_Mitochondria")|is.na(Genus))
+ps_seasonal <- subset_taxa(ps_seasonal, (Family!="Mitochondria")|is.na(Family))
+
+ps_seasonal <- name_na_taxa(ps_seasonal, include_rank = F, na_label="Unknown <tax>")
+ps_seasonal <- tax_glom(ps_seasonal, "Genus")
+ps_seasonal <- label_duplicate_taxa(ps_seasonal, tax_level="Genus")
+taxa_names(ps_seasonal) <- phyloseq::tax_table(ps_seasonal)[,6]
+
+ps_seasonal <- subset_samples(ps_seasonal, sample_sums(ps_seasonal) > 5000)
+ps_seasonal <- phyloseq_filter_prevalence(ps_seasonal, prev.trh = 0.05)
+ps_seasonal <- phyloseq_filter_taxa_tot_fraction(ps_seasonal, frac=0.00005)
+
+sample_data(ps_seasonal)$Sampling <- factor(sample_data(ps_seasonal)$Sampling,
+                                            levels=c("2021 June",
+                                                     "2021 September",
+                                                     "2021 December",
+                                                     "2022 March",
+                                                     "2022 June",
+                                                     "2022 November",
+                                                     "2023 February",
+                                                     "2023 April",
+                                                     "2023 June"))
+sample_data(ps_seasonal)$Year <- ifelse(sample_data(ps_seasonal)$Sampling %in% 
+                                          c("2021 June", "2021 September", "2021 December",
+                                            "2022 March", "2022 June"), "2021/22", "2022/23")
+
+sample_data(ps_seasonal)$Season <- factor(sample_data(ps_seasonal)$Season, 
+                                          levels=c("Spring","Summer","Autumn","Winter"))
+
+sample_data(ps_seasonal)$PopID <- factor(sample_data(ps_seasonal)$PopID,
+                                         levels=c("M52","M25","M26"))
+levels(sample_data(ps_seasonal)$PopID) <- c("Shallow lake","Deep lake","River")
+
+sample_data(ps_seasonal)$SiteID <- 
+  gsub("W","",gsub("[0-9]*$","",row.names(sample_data(ps_seasonal))))
+
+summary(sample_sums(ps_seasonal))
+table(sample_data(ps_seasonal)$Sampling, sample_data(ps_seasonal)$Type,
+                                              sample_data(ps_seasonal)$PopID)
+
+ps_seasonal <- rarefy_even_depth(ps_seasonal)
+```
+
+```{r}
+library(microbiome); library(RColorBrewer)
+
+prevalences <- seq(.05, 1, .2)
+detections <- round(10^seq(log10(0.002), log10(.2), length = 9), 3)
+
+polyp_M25_rel <- microbiome::transform(
+  subset_samples(ps_seasonal, Type=="polyp"&PopID=="Deep lake"), "compositional")
+polyp_M26_rel <- microbiome::transform(
+  subset_samples(ps_seasonal, Type=="polyp"&PopID=="River"), "compositional")
+polyp_M52_rel <- microbiome::transform(
+  subset_samples(ps_seasonal, Type=="polyp"&PopID=="Shallow lake"), "compositional")
+
+
+pcl.M25 <- plot_core(polyp_M25_rel, 
+          prevalences = prevalences, 
+          detections = c(0, 0.1, 0.5, 2, 5, 20)/100, 
+          plot.type = "lineplot") + 
+  xlab("Relative Abundance (%)")
+pcl.M26 <- plot_core(polyp_M26_rel, 
+          prevalences = prevalences, 
+          detections = c(0, 0.1, 0.5, 2, 5, 20)/100, 
+          plot.type = "lineplot") + 
+  xlab("Relative Abundance (%)")
+pcl.M52 <- plot_core(polyp_M52_rel, 
+          prevalences = prevalences, 
+          detections = c(0, 0.1, 0.5, 2, 5, 20)/100, 
+          plot.type = "lineplot") + 
+  xlab("Relative Abundance (%)")
+ggpubr::ggarrange(pcl.M52, pcl.M25, pcl.M26, common.legend=T)
+
+
+pchm.M52 <- plot_core(polyp_M52_rel,horizontal=T,
+               plot.type = "heatmap", 
+               colours = rev(brewer.pal(5, "Spectral")),
+               prevalences = prevalences, 
+               detections = detections, 
+               min.prevalence = prevalence(polyp_M25_rel, sort = TRUE)[100]) +
+  labs(x = "Detection Threshold\n(Relative Abundance (%))") +
+  scale_fill_gradientn(
+      colours = rev(brewer.pal(9, "Spectral")),  # Specify the color palette
+      name = "Prevalence:"                      # Optional: add a legend title
+  ) +
+  theme(axis.text.y= element_text(size=8, face="italic"),
+        axis.text.x.bottom=element_text(size=9,angle=45,hjust = 1),
+        axis.title = element_text(size=10),
+        legend.text = element_text(size=8),
+        legend.title = element_text(size=10))+labs(title="Shallow lake")
+
+pchm.M25 <- plot_core(polyp_M25_rel,horizontal=T,
+               plot.type = "heatmap", 
+               colours = rev(brewer.pal(5, "Spectral")),
+               prevalences = prevalences, 
+               detections = detections, 
+               min.prevalence = prevalence(polyp_M25_rel, sort = TRUE)[100]) + labs(x="")+
+  #labs(x = "Detection Threshold\n(Relative Abundance (%))") +
+  theme(axis.text.y= element_text(size=8, face="italic"),
+        axis.text.x.bottom=element_text(size=9,angle=45,hjust = 1),
+        axis.title = element_text(size=10),
+        legend.text = element_text(size=8),
+        legend.title = element_text(size=10))+labs(title="Deep lake")
+
+pchm.M26 <- plot_core(polyp_M26_rel,horizontal=T,
+               plot.type = "heatmap", 
+               colours = rev(brewer.pal(5, "Spectral")),
+               prevalences = prevalences, 
+               detections = detections, 
+               min.prevalence = prevalence(polyp_M25_rel, sort = TRUE)[100]) + labs(x="")+
+  theme(axis.text.y= element_text(size=8, face="italic"),
+        axis.text.x.bottom=element_text(size=9,angle=45,hjust = 1),
+        axis.title = element_text(size=10),
+        legend.text = element_text(size=8),
+        legend.title = element_text(size=10))+labs(title="River")
+
+widths <- c(length(levels(pchm.M52$data$Taxa)),
+                               length(levels(pchm.M25$data$Taxa)),
+                               length(levels(pchm.M26$data$Taxa)))
+
+ragg::agg_tiff(filename="~/hidra/2023/MicrobiomeSeasonal/MS/figs/polyp_core.tiff",
+               width=10, height=6,units="in",res=300, scaling=0.75)
+ggpubr::ggarrange(pchm.M52, pchm.M25, pchm.M26, common.legend=T,ncol=3,align="h",
+                  widths=widths/sum(widths))
+dev.off()
+```
+
+```{r}
+library(microbiome); library(RColorBrewer)
+
+prevalences <- seq(0.1, 1, .2)
+detections <- round(10^seq(log10(0.006), log10(.2), length = 9), 3)
+
+water_M25_rel <- microbiome::transform(
+  subset_samples(ps_seasonal, Type=="water"&PopID=="Deep lake"), "compositional")
+water_M26_rel <- microbiome::transform(
+  subset_samples(ps_seasonal, Type=="water"&PopID=="River"), "compositional")
+water_M52_rel <- microbiome::transform(
+  subset_samples(ps_seasonal, Type=="water"&PopID=="Shallow lake"), "compositional")
+
+
+pcl.M25 <- plot_core(water_M25_rel, 
+          prevalences = prevalences, 
+          detections = c(0, 0.1, 0.5, 2, 5, 20)/100, 
+          plot.type = "lineplot") + 
+  xlab("Relative Abundance (%)")
+pcl.M26 <- plot_core(water_M26_rel, 
+          prevalences = prevalences, 
+          detections = c(0, 0.1, 0.5, 2, 5, 20)/100, 
+          plot.type = "lineplot") + 
+  xlab("Relative Abundance (%)")
+pcl.M52 <- plot_core(water_M52_rel, 
+          prevalences = prevalences, 
+          detections = c(0, 0.1, 0.5, 2, 5, 20)/100, 
+          plot.type = "lineplot") + 
+  xlab("Relative Abundance (%)")
+ggpubr::ggarrange(pcl.M52, pcl.M25, pcl.M26, common.legend=T)
+
+
+pchm.M52 <- plot_core(water_M52_rel,horizontal=T,
+               plot.type = "heatmap", 
+               colours = rev(brewer.pal(5, "Spectral")),
+               prevalences = prevalences, 
+               detections = detections, 
+               min.prevalence = prevalence(polyp_M25_rel, sort = TRUE)[100]) +
+  labs(x = "Detection Threshold\n(Relative Abundance (%))") +
+  scale_fill_gradientn(
+      colours = rev(brewer.pal(9, "Spectral")),  # Specify the color palette
+      name = "Prevalence:"                      # Optional: add a legend title
+  ) +
+  theme(axis.text.y= element_text(size=8, face="italic"),
+        axis.text.x.bottom=element_text(size=9,angle=45,hjust = 1),
+        axis.title = element_text(size=10),
+        legend.text = element_text(size=8),
+        legend.title = element_text(size=10))+labs(title="Shallow lake")
+
+pchm.M25 <- plot_core(water_M25_rel,horizontal=T,
+               plot.type = "heatmap", 
+               colours = rev(brewer.pal(5, "Spectral")),
+               prevalences = prevalences, 
+               detections = detections, 
+               min.prevalence = prevalence(polyp_M25_rel, sort = TRUE)[100]) + labs(x="")+
+  #labs(x = "Detection Threshold\n(Relative Abundance (%))") +
+  theme(axis.text.y= element_text(size=8, face="italic"),
+        axis.text.x.bottom=element_text(size=9,angle=45,hjust = 1),
+        axis.title = element_text(size=10),
+        legend.text = element_text(size=8),
+        legend.title = element_text(size=10))+labs(title="Deep lake")
+
+pchm.M26 <- plot_core(water_M26_rel,horizontal=T,
+               plot.type = "heatmap", 
+               colours = rev(brewer.pal(5, "Spectral")),
+               prevalences = prevalences, 
+               detections = detections, 
+               min.prevalence = prevalence(polyp_M25_rel, sort = TRUE)[100]) + labs(x="")+
+  theme(axis.text.y= element_text(size=8, face="italic"),
+        axis.text.x.bottom=element_text(size=9,angle=45,hjust = 1),
+        axis.title = element_text(size=10),
+        legend.text = element_text(size=8),
+        legend.title = element_text(size=10))+labs(title="River")
+
+widths <- c(length(levels(pchm.M52$data$Taxa)),
+                               length(levels(pchm.M25$data$Taxa)),
+                               length(levels(pchm.M26$data$Taxa)))
+
+ragg::agg_tiff(filename="~/hidra/2023/MicrobiomeSeasonal/MS/figs/water_core.tiff",
+               width=10, height=6,units="in",res=300, scaling=0.75)
+ggpubr::ggarrange(pchm.M52, pchm.M25, pchm.M26, common.legend=T,ncol=3,align="h",
+                  widths=widths/sum(widths))
+dev.off()
+```
+
+
+# Alpha diversity calculations & plots
+```{r alpha1, fig.height=10, fig.width=10, message=F, warning=F}
+sample_data(ps_seasonal)$chao1 <- microbiome::alpha(ps_seasonal, "chao1")[,1]
+sample_data(ps_seasonal)$faith_pd <- btools::estimate_pd(ps_seasonal)$PD
+sample_data(ps_seasonal)$shannon <- microbiome::alpha(ps_seasonal, "shannon")[,1]
+sample_data(ps_seasonal)$observed <- microbiome::alpha(ps_seasonal, "observed")[,1]
+
+alpha_plot <- ggplot(sample_data(ps_seasonal), aes(y=chao1, x=Sampling, fill=Season))+
+  geom_boxplot()+facet_wrap(~PopID*Type,ncol=2)+theme_bw()+
+  theme(axis.text.x=element_text(angle=45,hjust=1))+
+  labs(title="Alpha diversity")+
+  ylab("Chao1 diversity index")+
+  scale_fill_manual(values=c("Spring"="lightgreen","Summer"="tan2",
+                              "Autumn"="tomato2","Winter"="steelblue3"))
+alpha_plot2 <- ggplot(sample_data(ps_seasonal), aes(y=faith_pd, x=Sampling, fill=Season))+
+  geom_boxplot()+facet_wrap(~PopID*Type,ncol=2)+theme_bw()+
+  theme(axis.text.x=element_text(angle=45,hjust=1))+
+  labs(title="Alpha diversity")+
+  ylab("Faith's phylogenetic diversity index")+
+  scale_fill_manual(values=c("Spring"="lightgreen","Summer"="tan2",
+                              "Autumn"="tomato2","Winter"="steelblue3"))
+alpha_plot3 <- ggplot(sample_data(ps_seasonal), aes(y=shannon, x=Sampling, fill=Season))+
+  geom_boxplot()+facet_wrap(~PopID*Type,ncol=2)+theme_bw()+
+  theme(axis.text.x=element_text(angle=45,hjust=1))+
+  labs(title="Alpha diversity")+
+  ylab("Shannon diversity index")+
+  scale_fill_manual(values=c("Spring"="lightgreen","Summer"="tan2",
+                              "Autumn"="tomato2","Winter"="steelblue3"))
+alpha_plot4 <- ggplot(sample_data(ps_seasonal), aes(y=observed, x=Sampling, fill=Season))+
+  geom_boxplot()+facet_wrap(~PopID*Type,ncol=2)+theme_bw()+
+  theme(axis.text.x=element_text(angle=45,hjust=1))+
+  labs(title="Alpha diversity")+
+  ylab("No. of observed features")+
+  scale_fill_manual(values=c("Spring"="lightgreen","Summer"="tan2",
+                              "Autumn"="tomato2","Winter"="steelblue3"))
+
+ragg::agg_tiff(filename="/storage/microbiome/seasonal_2024/figs/alpha_div.tiff",
+               width=10, height=10,units="in",res=300, scaling=0.75)
+ggpubr::ggarrange(alpha_plot+labs(title="Chao1 index"), 
+    #              alpha_plot2+labs(title="Faith's PD"), 
+                  alpha_plot3+labs(title="Shannon index"), 
+                  alpha_plot4+labs(title="Observed features"), ncol=2, nrow=2,
+                  labels="AUTO",common.legend=T)
+dev.off()
+
+polyp_div <- sample_data(ps_seasonal)%>%data.frame()%>%filter(Type=="polyp")%>%
+  select("SeqID","PopID","Sampling","Season","chao1","faith_pd","shannon","observed")
+water_div <- sample_data(ps_seasonal)%>%data.frame()%>%filter(Type=="water")%>%
+  select("SeqID","PopID","Sampling","Temp","chao1","faith_pd","shannon","observed")
+
+polyp_div$SiteID <- gsub("[0-9]*$","",polyp_div$SeqID) 
+water_div$SiteID <- gsub("W","",water_div$SeqID)
+
+names(polyp_div) <- paste("polyp", names(polyp_div), sep="_")
+names(water_div) <- paste("water", names(water_div), sep="_")
+
+div <- left_join(polyp_div, water_div, by=join_by("polyp_SiteID"=="water_SiteID"))
+```
+
+# Beta diversity calculations & plots
+```{r, fig.width=10, message=F, warning=F}
+siteall_comp <- microbiome::transform(ps_seasonal,"identity")
+nmds.obj_all.bray <- ordinate(siteall_comp,method="PCoA", distance="bray")
+beta.braycurtis_all <- plot_ordination(siteall_comp,nmds.obj_all.bray,
+                                    type="samples",color="Season",shape="Type")+
+  theme_bw()+geom_point(size=3)+facet_wrap(~PopID)+
+  labs(title="Beta diversity - Bray Curtis")+
+  scale_color_manual(values=c("Spring"="lightgreen","Summer"="tan2",
+                              "Autumn"="tomato2","Winter"="steelblue3"))
+
+beta.braycurtis_all
+
+nmds.obj_all.jaccard <- ordinate(siteall_comp,method="PCoA", distance="jaccard", binary=T)
+beta.jaccard_all <- plot_ordination(siteall_comp,nmds.obj_all.jaccard,
+                                    type="samples",color="Season",shape="Type")+
+  theme_bw()+geom_point(size=3)+facet_wrap(~PopID)+
+  labs(title="Beta diversity - Jaccard presence-absence")+
+  scale_color_manual(values=c("Spring"="lightgreen","Summer"="tan2",
+                              "Autumn"="tomato2","Winter"="steelblue3"))
+beta.jaccard_all
+
+```
+
+```{r}
+library(ggpubr)
+ragg::agg_tiff(filename="/storage/microbiome/seasonal_2024/figs/ab_div.tiff",
+               width=8, height=6,units="in",res=300, scaling=0.8)
+ggarrange(alpha_plot+theme(legend.position = "bottom",
+                legend.background = element_rect(color = "black", linewidth = 0.25)), 
+          beta.braycurtis_all+
+  guides(
+    color = guide_legend(order = 2), # Set order of legends
+    shape = guide_legend(order = 1)
+  ) +
+  theme(
+    legend.position="bottom",
+    legend.box = "vertical",         # Stack legends vertically
+    legend.spacing.y = unit(0.0, 'cm'), # Adjust vertical spacing between legends
+    legend.background = element_rect(color = "black", linewidth = 0.25)   #Draw box around each legend
+    ),
+  labels="AUTO")
+dev.off()
+
+```
+
+```{r}
+sample_data(siteall_comp)$TypeSeason <- interaction(sample_data(siteall_comp)$Type,sample_data(siteall_comp)$Season)
+sample_data(siteall_comp)$Site <- gsub("víz/","",sample_data(siteall_comp)$SamplingName)
+sample_data(siteall_comp)$Site <- gsub("/[0-9]*","",sample_data(siteall_comp)$Site)
+sample_data(siteall_comp)$Site <- paste(sample_data(siteall_comp)$Sampling, sample_data(siteall_comp)$Site)
+
+samplesM25 <- subset_samples(siteall_comp, PopID=="Deep lake")
+samplesM26 <- subset_samples(siteall_comp, PopID=="River")
+samplesM52 <- subset_samples(siteall_comp, PopID=="Shallow lake")
+
+polypsM25 <- subset_samples(siteall_comp, PopID=="Deep lake"&Type=="polyp")
+polypsM26 <- subset_samples(siteall_comp, PopID=="River"&Type=="polyp")
+polypsM52 <- subset_samples(siteall_comp, PopID=="Shallow lake"&Type=="polyp")
+
+waterM25 <- subset_samples(siteall_comp, PopID=="Deep lake"&Type=="water")
+waterM26 <- subset_samples(siteall_comp, PopID=="River"&Type=="water")
+waterM52 <- subset_samples(siteall_comp, PopID=="Shallow lake"&Type=="water")
+
+
+dist.bray.M25 <- phyloseq::distance(samplesM25, method="bray")
+dist.bray.M26 <- phyloseq::distance(samplesM26, method="bray")
+dist.bray.M52 <- phyloseq::distance(samplesM52, method="bray")
+
+dist.bray.M25.polyps <- phyloseq::distance(polypsM25, method="bray")
+dist.bray.M26.polyps <- phyloseq::distance(polypsM26, method="bray")
+dist.bray.M52.polyps <- phyloseq::distance(polypsM52, method="bray")
+
+dist.bray.M25.water <- phyloseq::distance(waterM25, method="bray")
+dist.bray.M26.water <- phyloseq::distance(waterM26, method="bray")
+dist.bray.M52.water <- phyloseq::distance(waterM52, method="bray")
+
+dist.jaccard.M25 <- phyloseq::distance(samplesM25, method="jaccard", binary=T)
+dist.jaccard.M26 <- phyloseq::distance(samplesM26, method="jaccard", binary=T)
+dist.jaccard.M52 <- phyloseq::distance(samplesM52, method="jaccard", binary=T)
+
+dist.jaccard.M25.polyps <- phyloseq::distance(polypsM25, method="jaccard", binary=T)
+dist.jaccard.M26.polyps <- phyloseq::distance(polypsM26, method="jaccard", binary=T)
+dist.jaccard.M52.polyps <- phyloseq::distance(polypsM52, method="jaccard", binary=T)
+
+dist.jaccard.M25.water <- phyloseq::distance(waterM25, method="jaccard", binary=T)
+dist.jaccard.M26.water <- phyloseq::distance(waterM26, method="jaccard", binary=T)
+dist.jaccard.M52.water <- phyloseq::distance(waterM52, method="jaccard", binary=T)
+
+```
+
+
+# Compare diversity of water and polyp samples
+
+```{r}
+library(glmmTMB); library(MuMIn)
+div.res <- data.frame(Pop=c("Shallow lake","Deep lake","River"),
+                      chao1_p=NA, chao1_R2=NA,
+                      shannon_p=NA, shannon_R2=NA,
+                      obsfeat_p=NA, obsfeat_R2=NA,
+                      BC_p=NA, BC_R2=NA,
+                      Jac_p=NA, Jac_R2=NA)
+
+alpha_type_m52 <- glmmTMB(chao1~Type,
+                          data=sample_data(ps_seasonal)%>%data.frame()%>%
+                            filter(PopID=="Shallow lake"))
+div.res$chao1_p[1] <- round(anova(alpha_type_m52, update(alpha_type_m52, .~.-Type))[[8]][2],3)
+div.res$chao1_R2[1] <- r.squaredGLMM(alpha_type_m52)[1]
+
+alpha_type_m25 <- glmmTMB(chao1~Type,
+                          data=sample_data(ps_seasonal)%>%data.frame()%>%
+                            filter(PopID=="Deep lake"))
+div.res$chao1_p[2] <- round(anova(alpha_type_m25, update(alpha_type_m25, .~.-Type))[[8]][2],3)
+div.res$chao1_R2[2] <- r.squaredGLMM(alpha_type_m25)[1]
+
+alpha_type_m26 <- glmmTMB(chao1~Type,
+                          data=sample_data(ps_seasonal)%>%data.frame()%>%
+                            filter(PopID=="River"))
+div.res$chao1_p[3] <- round(anova(alpha_type_m26, update(alpha_type_m26, .~.-Type))[[8]][2],3)
+div.res$chao1_R2[3] <- r.squaredGLMM(alpha_type_m26)[1]
+
+alpha_type_m52 <- glmmTMB(shannon~Type,
+                          data=sample_data(ps_seasonal)%>%data.frame()%>%
+                            filter(PopID=="Shallow lake"))
+div.res$shannon_p[1] <- round(anova(alpha_type_m52, update(alpha_type_m52, .~.-Type))[[8]][2],3)
+div.res$shannon_R2[1] <- r.squaredGLMM(alpha_type_m52)[1]
+
+alpha_type_m25 <- glmmTMB(shannon~Type,
+                          data=sample_data(ps_seasonal)%>%data.frame()%>%
+                            filter(PopID=="Deep lake"))
+div.res$shannon_p[2] <- round(anova(alpha_type_m25, update(alpha_type_m25, .~.-Type))[[8]][2],3)
+div.res$shannon_R2[2] <- r.squaredGLMM(alpha_type_m25)[1]
+
+alpha_type_m26 <- glmmTMB(shannon~Type,
+                          data=sample_data(ps_seasonal)%>%data.frame()%>%
+                            filter(PopID=="River"))
+div.res$shannon_p[3] <- round(anova(alpha_type_m26, update(alpha_type_m26, .~.-Type))[[8]][2],3)
+div.res$shannon_R2[3] <- r.squaredGLMM(alpha_type_m26)[1]
+
+alpha_type_m52 <- glmmTMB(observed~Type,
+                          data=sample_data(ps_seasonal)%>%data.frame()%>%
+                            filter(PopID=="Shallow lake"))
+div.res$obsfeat_p[1] <- round(anova(alpha_type_m52, update(alpha_type_m52, .~.-Type))[[8]][2],3)
+div.res$obsfeat_R2[1] <- r.squaredGLMM(alpha_type_m52)[1]
+
+alpha_type_m25 <- glmmTMB(observed~Type,
+                          data=sample_data(ps_seasonal)%>%data.frame()%>%
+                            filter(PopID=="Deep lake"))
+div.res$obsfeat_p[2] <- round(anova(alpha_type_m25, update(alpha_type_m25, .~.-Type))[[8]][2],3)
+div.res$obsfeat_R2[2] <- r.squaredGLMM(alpha_type_m25)[1]
+
+alpha_type_m26 <- glmmTMB(observed~Type,
+                          data=sample_data(ps_seasonal)%>%data.frame()%>%
+                            filter(PopID=="River"))
+div.res$obsfeat_p[3] <- round(anova(alpha_type_m26, update(alpha_type_m26, .~.-Type))[[8]][2],3)
+div.res$obsfeat_R2[3] <- r.squaredGLMM(alpha_type_m26)[1]
+
+ad.M25 <- vegan::adonis2(dist.bray.M25~Type, data=data.frame(sample_data(samplesM25)),
+                         by="onedf")
+ad.M26 <- vegan::adonis2(dist.bray.M26~Type, data=data.frame(sample_data(samplesM26)),
+                         by="onedf")
+ad.M52 <- vegan::adonis2(dist.bray.M52~Type, data=data.frame(sample_data(samplesM52)),
+                         by="onedf")
+div.res$BC_p[1] <- ad.M52[[5]][1]
+div.res$BC_R2[1] <- ad.M52[[3]][1]
+div.res$BC_p[2] <- ad.M25[[5]][1]
+div.res$BC_R2[2] <- ad.M25[[3]][1]
+div.res$BC_p[3] <- ad.M26[[5]][1]
+div.res$BC_R2[3] <- ad.M26[[3]][1]
+
+ad.M25 <- vegan::adonis2(dist.jaccard.M25~Type, data=data.frame(sample_data(samplesM25)),
+                         by="onedf")
+ad.M26 <- vegan::adonis2(dist.jaccard.M26~Type, data=data.frame(sample_data(samplesM26)),
+                         by="onedf")
+ad.M52 <- vegan::adonis2(dist.jaccard.M52~Type, data=data.frame(sample_data(samplesM52)),
+                         by="onedf")
+div.res$Jac_p[1] <- ad.M52[[5]][1]
+div.res$Jac_R2[1] <- ad.M52[[3]][1]
+div.res$Jac_p[2] <- ad.M25[[5]][1]
+div.res$Jac_R2[2] <- ad.M25[[3]][1]
+div.res$Jac_p[3] <- ad.M26[[5]][1]
+div.res$Jac_R2[3] <- ad.M26[[3]][1]
+```
+
+# Predictors of variation in alpha and beta diversity (season, temperature & bacterioplankton diversity)
+
+```{r, fig.height=10, fig.width=10, message=F, warning=F}
+library(glmmTMB); library(DHARMa); library(MuMIn)
+
+###################################################################################
+##################################### Shallow lake ################################
+x00 <- glmmTMB(polyp_chao1~1+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="Shallow lake"))
+x1 <- glmmTMB(polyp_chao1~scale(water_Temp)+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="Shallow lake"))
+x2 <- glmmTMB(polyp_chao1~polyp_Season+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="Shallow lake"))
+x01 <- glmmTMB(water_chao1~1, 
+              data=div%>%filter(water_PopID=="Shallow lake"&!duplicated(water_SeqID)))
+x3 <- glmmTMB(water_chao1~scale(water_Temp), 
+              data=div%>%filter(water_PopID=="Shallow lake"&!duplicated(water_SeqID)))
+x4 <- glmmTMB(water_chao1~polyp_Season, 
+              data=div%>%filter(water_PopID=="Shallow lake"&!duplicated(water_SeqID)))
+x5 <- glmmTMB(polyp_chao1~scale(water_chao1)+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="Shallow lake"))
+
+extract_info <- function(model,nullmodel) {
+  pvals <- anova(model, nullmodel)[[8]][2]
+  r2m <- r.squaredGLMM(model)[1]
+  return(list(R2m = r2m, pvals = pvals))
+}
+
+models <- list(x1, x2, x3, x4, x5)
+null_models <- list(x00, x00, x01, x01, x00)
+
+results <- mapply(extract_info, models, null_models, SIMPLIFY = FALSE)
+
+results_table_m52 <- cbind(
+  rbind(as.data.frame(results[[1]]), as.data.frame(results[[3]])),
+  rbind(as.data.frame(results[[2]]), as.data.frame(results[[4]])),
+  rbind(as.data.frame(results[[5]]), data.frame(R2m=NA, pvals=NA))
+)
+
+###################################################################################
+##################################### Deep lake ################################
+x00 <- glmmTMB(polyp_chao1~1+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="Deep lake"))
+## random effects variance estimated to be 0, logLik not calculated. Remove random factor
+x00 <- glmmTMB(polyp_chao1~1, 
+              data=div%>%filter(water_PopID=="Deep lake"))
+x1 <- glmmTMB(polyp_chao1~scale(water_Temp), 
+              data=div%>%filter(water_PopID=="Deep lake"))
+x2 <- glmmTMB(polyp_chao1~polyp_Season, 
+              data=div%>%filter(water_PopID=="Deep lake")) 
+x01 <- glmmTMB(water_chao1~1, 
+              data=div%>%filter(water_PopID=="Deep lake"&!duplicated(water_SeqID)))
+x3 <- glmmTMB(water_chao1~scale(water_Temp), 
+              data=div%>%filter(water_PopID=="Deep lake"&!duplicated(water_SeqID)))
+x4 <- glmmTMB(water_chao1~polyp_Season, 
+              data=div%>%filter(water_PopID=="Deep lake"&!duplicated(water_SeqID)))
+x5 <- glmmTMB(polyp_chao1~scale(water_chao1), 
+              data=div%>%filter(water_PopID=="Deep lake"))
+
+extract_info <- function(model,nullmodel) {
+  pvals <- anova(model, nullmodel)[[8]][2]
+  r2m <- r.squaredGLMM(model)[1]
+  return(list(R2m = r2m, pvals = pvals))
+}
+
+models <- list(x1, x2, x3, x4, x5)
+null_models <- list(x00, x00, x01, x01, x00)
+
+results <- mapply(extract_info, models, null_models, SIMPLIFY = FALSE)
+
+results_table_m25 <- cbind(
+  rbind(as.data.frame(results[[1]]), as.data.frame(results[[3]])),
+  rbind(as.data.frame(results[[2]]), as.data.frame(results[[4]])),
+  rbind(as.data.frame(results[[5]]), data.frame(R2m=NA, pvals=NA))
+)
+
+###################################################################################
+##################################### River ################################
+x00 <- glmmTMB(polyp_chao1~1+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="River"), family="gaussian")
+x1 <- glmmTMB(polyp_chao1~scale(water_Temp)+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="River"))
+x2 <- glmmTMB(polyp_chao1~polyp_Season+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="River"))
+x01 <- glmmTMB(water_chao1~1, 
+              data=div%>%filter(water_PopID=="River"&!duplicated(water_SeqID)))
+x3 <- glmmTMB(water_chao1~scale(water_Temp), 
+              data=div%>%filter(water_PopID=="River"&!duplicated(water_SeqID)))
+x4 <- glmmTMB(water_chao1~polyp_Season, 
+              data=div%>%filter(water_PopID=="River"&!duplicated(water_SeqID)))
+x5 <- glmmTMB(polyp_chao1~scale(water_chao1)+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="River"), family="gaussian")
+
+extract_info <- function(model,nullmodel) {
+  pvals <- anova(model, nullmodel)[[8]][2]
+  r2m <- r.squaredGLMM(model)[1]
+  return(list(R2m = r2m, pvals = pvals))
+}
+
+models <- list(x1, x2, x3, x4, x5)
+null_models <- list(x00, x00, x01, x01, x00)
+
+results <- mapply(extract_info, models, null_models, SIMPLIFY = FALSE)
+
+results_table_m26 <- cbind(
+  rbind(as.data.frame(results[[1]]), as.data.frame(results[[3]])),
+  rbind(as.data.frame(results[[2]]), as.data.frame(results[[4]])),
+  rbind(as.data.frame(results[[5]]), data.frame(R2m=NA, pvals=NA))
+)
+
+full_results_table <- rbind(results_table_m52, results_table_m25, results_table_m26)
+full_results_table <- cbind(popID=rep(c("Shallow lake","Deep lake","River"),each=2),
+                            response=rep(c("polyp_alpha","water_alpha"),3),
+                            full_results_table)
+names(full_results_table)[3:4] <- paste("Temperature",names(full_results_table)[3:4],
+                                        sep="_")
+names(full_results_table)[5:6] <- paste("Seasonality",names(full_results_table)[5:6],
+                                        sep="_")
+
+write.table(
+  full_results_table,
+  file="/storage/microbiome/seasonal_2024/figs/alpha_diversity_statistics.csv",
+  col.names=T, row.names=T, quote=F, sep="\t"
+)
+  
+```
+
+
+```{r, fig.height=10, fig.width=10, message=F, warning=F}
+library(glmmTMB); library(DHARMa); library(MuMIn)
+
+###################################################################################
+##################################### Shallow lake ################################
+x00 <- glmmTMB(polyp_shannon~1+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="Shallow lake"))
+x1 <- glmmTMB(polyp_shannon~scale(water_Temp)+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="Shallow lake"))
+x2 <- glmmTMB(polyp_shannon~polyp_Season+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="Shallow lake"))
+x01 <- glmmTMB(water_shannon~1, 
+              data=div%>%filter(water_PopID=="Shallow lake"&!duplicated(water_SeqID)))
+x3 <- glmmTMB(water_shannon~scale(water_Temp), 
+              data=div%>%filter(water_PopID=="Shallow lake"&!duplicated(water_SeqID)))
+x4 <- glmmTMB(water_shannon~polyp_Season, 
+              data=div%>%filter(water_PopID=="Shallow lake"&!duplicated(water_SeqID)))
+x5 <- glmmTMB(polyp_shannon~scale(water_shannon)+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="Shallow lake"))
+
+extract_info <- function(model,nullmodel) {
+  pvals <- anova(model, nullmodel)[[8]][2]
+  r2m <- r.squaredGLMM(model)[1]
+  return(list(R2m = r2m, pvals = pvals))
+}
+
+models <- list(x1, x2, x3, x4, x5)
+null_models <- list(x00, x00, x01, x01, x00)
+
+results <- mapply(extract_info, models, null_models, SIMPLIFY = FALSE)
+
+results_table_m52 <- cbind(
+  rbind(as.data.frame(results[[1]]), as.data.frame(results[[3]])),
+  rbind(as.data.frame(results[[2]]), as.data.frame(results[[4]])),
+  rbind(as.data.frame(results[[5]]), data.frame(R2m=NA, pvals=NA))
+)
+
+###################################################################################
+##################################### Deep lake ################################
+x00 <- glmmTMB(polyp_shannon~1+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="Deep lake"))
+## random effects variance estimated to be 0, logLik not calculated. Remove random factor
+#x00 <- glmmTMB(polyp_shannon~1, 
+#              data=div%>%filter(water_PopID=="Deep lake"))
+x1 <- glmmTMB(polyp_shannon~scale(water_Temp), 
+              data=div%>%filter(water_PopID=="Deep lake"))
+x2 <- glmmTMB(polyp_shannon~polyp_Season, 
+              data=div%>%filter(water_PopID=="Deep lake")) 
+x01 <- glmmTMB(water_shannon~1, 
+              data=div%>%filter(water_PopID=="Deep lake"&!duplicated(water_SeqID)))
+x3 <- glmmTMB(water_shannon~scale(water_Temp), 
+              data=div%>%filter(water_PopID=="Deep lake"&!duplicated(water_SeqID)))
+x4 <- glmmTMB(water_shannon~polyp_Season, 
+              data=div%>%filter(water_PopID=="Deep lake"&!duplicated(water_SeqID)))
+x5 <- glmmTMB(polyp_shannon~scale(water_shannon), 
+              data=div%>%filter(water_PopID=="Deep lake"))
+
+models <- list(x1, x2, x3, x4, x5)
+null_models <- list(x00, x00, x01, x01, x00)
+
+results <- mapply(extract_info, models, null_models, SIMPLIFY = FALSE)
+
+results_table_m25 <- cbind(
+  rbind(as.data.frame(results[[1]]), as.data.frame(results[[3]])),
+  rbind(as.data.frame(results[[2]]), as.data.frame(results[[4]])),
+  rbind(as.data.frame(results[[5]]), data.frame(R2m=NA, pvals=NA))
+)
+
+###################################################################################
+##################################### River ################################
+x00 <- glmmTMB(polyp_shannon~1+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="River"), family="gaussian")
+x1 <- glmmTMB(polyp_shannon~scale(water_Temp)+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="River"))
+x2 <- glmmTMB(polyp_shannon~polyp_Season+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="River"))
+x01 <- glmmTMB(water_shannon~1, 
+              data=div%>%filter(water_PopID=="River"&!duplicated(water_SeqID)))
+x3 <- glmmTMB(water_shannon~scale(water_Temp), 
+              data=div%>%filter(water_PopID=="River"&!duplicated(water_SeqID)))
+x4 <- glmmTMB(water_shannon~polyp_Season, 
+              data=div%>%filter(water_PopID=="River"&!duplicated(water_SeqID)))
+x5 <- glmmTMB(polyp_shannon~scale(water_shannon)+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="River"), family="gaussian")
+
+
+models <- list(x1, x2, x3, x4, x5)
+null_models <- list(x00, x00, x01, x01, x00)
+
+results <- mapply(extract_info, models, null_models, SIMPLIFY = FALSE)
+
+results_table_m26 <- cbind(
+  rbind(as.data.frame(results[[1]]), as.data.frame(results[[3]])),
+  rbind(as.data.frame(results[[2]]), as.data.frame(results[[4]])),
+  rbind(as.data.frame(results[[5]]), data.frame(R2m=NA, pvals=NA))
+)
+
+full_results_table <- rbind(results_table_m52, results_table_m25, results_table_m26)
+full_results_table <- cbind(popID=rep(c("Shallow lake","Deep lake","River"),each=2),
+                            response=rep(c("polyp_alpha","water_alpha"),3),
+                            full_results_table)
+names(full_results_table)[3:4] <- paste("Temperature",names(full_results_table)[3:4],
+                                        sep="_")
+names(full_results_table)[5:6] <- paste("Seasonality",names(full_results_table)[5:6],
+                                        sep="_")
+
+write.table(
+  full_results_table,
+  file="/storage/microbiome/seasonal_2024/figs/alpha_diversity_statistics_shannon.csv",
+  col.names=T, row.names=T, quote=F, sep="\t"
+)
+  
+```
+
+
+```{r, fig.height=10, fig.width=10, message=F, warning=F}
+library(glmmTMB); library(DHARMa); library(MuMIn)
+
+###################################################################################
+##################################### Shallow lake ################################
+x00 <- glmmTMB(polyp_observed~1+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="Shallow lake"), family="nbinom1")
+x1 <- glmmTMB(polyp_observed~scale(water_Temp)+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="Shallow lake"), family="nbinom1")
+x2 <- glmmTMB(polyp_observed~polyp_Season+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="Shallow lake"), family="nbinom1")
+x01 <- glmmTMB(water_observed~1, 
+              data=div%>%filter(water_PopID=="Shallow lake"&!duplicated(water_SeqID)), family="nbinom1")
+x3 <- glmmTMB(water_observed~scale(water_Temp), 
+              data=div%>%filter(water_PopID=="Shallow lake"&!duplicated(water_SeqID)), family="nbinom1")
+x4 <- glmmTMB(water_observed~polyp_Season, 
+              data=div%>%filter(water_PopID=="Shallow lake"&!duplicated(water_SeqID)), family="nbinom1")
+x5 <- glmmTMB(polyp_observed~scale(water_observed)+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="Shallow lake"), family="nbinom1")
+
+models <- list(x1, x2, x3, x4, x5)
+null_models <- list(x00, x00, x01, x01, x00)
+
+results <- mapply(extract_info, models, null_models, SIMPLIFY = FALSE)
+
+results_table_m52 <- cbind(
+  rbind(as.data.frame(results[[1]]), as.data.frame(results[[3]])),
+  rbind(as.data.frame(results[[2]]), as.data.frame(results[[4]])),
+  rbind(as.data.frame(results[[5]]), data.frame(R2m=NA, pvals=NA))
+)
+
+###################################################################################
+##################################### Deep lake ################################
+x00 <- glmmTMB(polyp_observed~1+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="Deep lake"), family="nbinom1")
+x1 <- glmmTMB(polyp_observed~scale(water_Temp), 
+              data=div%>%filter(water_PopID=="Deep lake"), family="nbinom1")
+x2 <- glmmTMB(polyp_observed~polyp_Season, 
+              data=div%>%filter(water_PopID=="Deep lake"), family="nbinom1") 
+x01 <- glmmTMB(water_observed~1, 
+              data=div%>%filter(water_PopID=="Deep lake"&!duplicated(water_SeqID)), family="nbinom1")
+x3 <- glmmTMB(water_observed~scale(water_Temp), 
+              data=div%>%filter(water_PopID=="Deep lake"&!duplicated(water_SeqID)), family="nbinom1")
+x4 <- glmmTMB(water_observed~polyp_Season, 
+              data=div%>%filter(water_PopID=="Deep lake"&!duplicated(water_SeqID)), family="nbinom1")
+x5 <- glmmTMB(polyp_observed~scale(water_observed), 
+              data=div%>%filter(water_PopID=="Deep lake"), family="nbinom1")
+
+models <- list(x1, x2, x3, x4, x5)
+null_models <- list(x00, x00, x01, x01, x00)
+
+results <- mapply(extract_info, models, null_models, SIMPLIFY = FALSE)
+
+results_table_m25 <- cbind(
+  rbind(as.data.frame(results[[1]]), as.data.frame(results[[3]])),
+  rbind(as.data.frame(results[[2]]), as.data.frame(results[[4]])),
+  rbind(as.data.frame(results[[5]]), data.frame(R2m=NA, pvals=NA))
+)
+
+###################################################################################
+##################################### River ################################
+x00 <- glmmTMB(polyp_observed~1+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="River"), family="nbinom1")
+x1 <- glmmTMB(polyp_observed~scale(water_Temp)+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="River"), family="nbinom1")
+x2 <- glmmTMB(polyp_observed~polyp_Season+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="River"), family="nbinom1")
+x01 <- glmmTMB(water_observed~1, 
+              data=div%>%filter(water_PopID=="River"&!duplicated(water_SeqID)), family="nbinom1")
+x3 <- glmmTMB(water_observed~scale(water_Temp), 
+              data=div%>%filter(water_PopID=="River"&!duplicated(water_SeqID)), family="nbinom1")
+x4 <- glmmTMB(water_observed~polyp_Season, 
+              data=div%>%filter(water_PopID=="River"&!duplicated(water_SeqID)), family="nbinom1")
+x5 <- glmmTMB(polyp_observed~scale(water_observed)+(1|polyp_SiteID), 
+              data=div%>%filter(water_PopID=="River"), family="nbinom1")
+
+models <- list(x1, x2, x3, x4, x5)
+null_models <- list(x00, x00, x01, x01, x00)
+
+results <- mapply(extract_info, models, null_models, SIMPLIFY = FALSE)
+
+results_table_m26 <- cbind(
+  rbind(as.data.frame(results[[1]]), as.data.frame(results[[3]])),
+  rbind(as.data.frame(results[[2]]), as.data.frame(results[[4]])),
+  rbind(as.data.frame(results[[5]]), data.frame(R2m=NA, pvals=NA))
+)
+
+full_results_table <- rbind(results_table_m52, results_table_m25, results_table_m26)
+full_results_table <- cbind(popID=rep(c("Shallow lake","Deep lake","River"),each=2),
+                            response=rep(c("polyp_alpha","water_alpha"),3),
+                            full_results_table)
+names(full_results_table)[3:4] <- paste("Temperature",names(full_results_table)[3:4],
+                                        sep="_")
+names(full_results_table)[5:6] <- paste("Seasonality",names(full_results_table)[5:6],
+                                        sep="_")
+
+write.table(
+  full_results_table,
+  file="/storage/microbiome/seasonal_2024/figs/alpha_diversity_statistics_observed.csv",
+  col.names=T, row.names=T, quote=F, sep="\t"
+)
+  
+```
+
+
+# Taxonomy barplots
+```{r, fig.width=10, message=F, warning=F}
+polyps <- subset_samples(ps_seasonal,Type=="polyp")
+water <- subset_samples(ps_seasonal,Type=="water")
+
+ragg::agg_tiff(filename="/storage/microbiome/seasonal_2024/figs/tax_polyps.tiff",
+               width=10, height=8,units="in",res=300, scaling=0.75)
+bar_polyps <- comp_barplot(polyps, tax_level="Genus",n_taxa=10)+
+  ggh4x::facet_grid2(PopID~Sampling, scales="free_x", independent="x")+
+  theme(axis.text.x = element_blank())+labs(title="Top bacterial taxa in polyp samples")
+
+bar_water <- comp_barplot(water, tax_level="Genus",n_taxa=10, palette=distinct_palette(10,pal="kelly"))+
+  ggh4x::facet_grid2(PopID~Sampling, scales="free_x", independent="x")+
+  theme(axis.text.x = element_blank())+labs(title="Top bacterial taxa in water samples")
+
+ggarrange(bar_polyps, bar_water, ncol=1,labels="AUTO")
+
+dev.off()
+```
+```{r, fig.width=10, message=F, warning=F, eval=F}
+subset_samples(ps_seasonal, Type=="polyp"&PopID=="M25")%>%
+  tax_transform("clr",rank="Genus")%>%
+  dist_calc(dist="bray")%>%
+  ord_calc(method="PCA")%>%
+  ord_plot(color="Sampling",plot_taxa=1:10, size=4,,
+           tax_lab_style = tax_lab_style(size=4))+labs(title="Population M25")
+subset_samples(ps_seasonal, Type=="polyp"&PopID=="M26")%>%
+  tax_transform("clr",rank="Genus")%>%
+  dist_calc(dist="bray")%>%
+  ord_calc(method="PCA")%>%
+  ord_plot(color="Sampling",plot_taxa=1:10, size=4,
+           tax_lab_style = tax_lab_style(size=4))+labs(title="Population M26")
+subset_samples(ps_seasonal, Type=="polyp"&PopID=="M52")%>%
+  tax_transform("clr",rank="Genus")%>%
+  dist_calc(dist="bray")%>%
+  ord_calc(method="PCA")%>%
+  ord_plot(color="Sampling",plot_taxa=1:10, size=4,
+           tax_lab_style = tax_lab_style(size=4))+labs(title="Population M52")
+```
+
+# Evaluate seasonality of microbiome composition of polyp and water samples
+
+```{r}
+### Polyp samples
+ad.M25.bray.polyps <- vegan::adonis2(dist.bray.M25.polyps~Season, data=data.frame(sample_data(polypsM25)))
+ad.M26.bray.polyps <- vegan::adonis2(dist.bray.M26.polyps~Season, data=data.frame(sample_data(polypsM26)))
+ad.M52.bray.polyps <- vegan::adonis2(dist.bray.M52.polyps~Season,
+               data=data.frame(sample_data(polypsM52)))
+
+ad.M25.jaccard.polyps <- vegan::adonis2(dist.jaccard.M25.polyps~Season, data=data.frame(sample_data(polypsM25)))
+ad.M26.jaccard.polyps <- vegan::adonis2(dist.jaccard.M26.polyps~Season, data=data.frame(sample_data(polypsM26)))
+ad.M52.jaccard.polyps <- vegan::adonis2(dist.jaccard.M52.polyps~Season,
+               data=data.frame(sample_data(polypsM52)))
+
+dbRDA.bray.M25.polyps <- capscale(dist.bray.M25.polyps ~ Temp, data=data.frame(sample_data(polypsM25)))
+dbRDA.bray.M26.polyps <- capscale(dist.bray.M26.polyps ~ Temp, data=data.frame(sample_data(polypsM26)))
+dbRDA.bray.M52.polyps <- capscale(dist.bray.M52.polyps ~ Temp, data=data.frame(sample_data(polypsM52)))
+
+dbRDA.jaccard.M25.polyps <- capscale(dist.jaccard.M25.polyps ~ Temp, data=data.frame(sample_data(polypsM25)))
+dbRDA.jaccard.M26.polyps <- capscale(dist.jaccard.M26.polyps ~ Temp, data=data.frame(sample_data(polypsM26)))
+dbRDA.jaccard.M52.polyps <- capscale(dist.jaccard.M52.polyps ~ Temp, data=data.frame(sample_data(polypsM52)))
+
+### Water samples
+ad.M25.bray.water <- vegan::adonis2(dist.bray.M25.water~Season, data=data.frame(sample_data(waterM25)))
+ad.M26.bray.water <- vegan::adonis2(dist.bray.M26.water~Season, data=data.frame(sample_data(waterM26)))
+ad.M52.bray.water <- vegan::adonis2(dist.bray.M52.water~Season,
+               data=data.frame(sample_data(waterM52)))
+
+ad.M25.jaccard.water <- vegan::adonis2(dist.jaccard.M25.water~Season, data=data.frame(sample_data(waterM25)))
+ad.M26.jaccard.water <- vegan::adonis2(dist.jaccard.M26.water~Season, data=data.frame(sample_data(waterM26)))
+ad.M52.jaccard.water <- vegan::adonis2(dist.jaccard.M52.water~Season,
+               data=data.frame(sample_data(waterM52)))
+
+dbRDA.bray.M25.water <- capscale(dist.bray.M25.water ~ Temp, data=data.frame(sample_data(waterM25)))
+dbRDA.bray.M26.water <- capscale(dist.bray.M26.water ~ Temp, data=data.frame(sample_data(waterM26)))
+dbRDA.bray.M52.water <- capscale(dist.bray.M52.water ~ Temp, data=data.frame(sample_data(waterM52)))
+
+dbRDA.jaccard.M25.water <- capscale(dist.jaccard.M25.water ~ Temp, data=data.frame(sample_data(waterM25)))
+dbRDA.jaccard.M26.water <- capscale(dist.jaccard.M26.water ~ Temp, data=data.frame(sample_data(waterM26)))
+dbRDA.jaccard.M52.water <- capscale(dist.jaccard.M52.water ~ Temp, data=data.frame(sample_data(waterM52)))
+
+beta.results.bray <- data.frame(
+  population=rep(c("Shallow lake", "Deep lake", "River"),each=2),
+  type=rep(c("polyp","water"),3),
+  season.r.squared=NA, season.p=NA,
+  temp.r.squared=NA, temp.p=NA
+)
+beta.results.bray$season.r.squared[1] <- ad.M52.bray.polyps$R2[1]
+beta.results.bray$season.p[1] <- ad.M52.bray.polyps$`Pr(>F)`[1]
+
+beta.results.bray$season.r.squared[2] <- ad.M52.bray.water$R2[1]
+beta.results.bray$season.p[2] <- ad.M52.bray.water$`Pr(>F)`[1]
+
+beta.results.bray$season.r.squared[3] <- ad.M25.bray.polyps$R2[1]
+beta.results.bray$season.p[3] <- ad.M25.bray.polyps$`Pr(>F)`[1]
+
+beta.results.bray$season.r.squared[4] <- ad.M25.bray.water$R2[1]
+beta.results.bray$season.p[4] <- ad.M25.bray.water$`Pr(>F)`[1]
+
+beta.results.bray$season.r.squared[5] <- ad.M26.bray.polyps$R2[1]
+beta.results.bray$season.p[5] <- ad.M26.bray.polyps$`Pr(>F)`[1]
+
+beta.results.bray$season.r.squared[6] <- ad.M26.bray.water$R2[1]
+beta.results.bray$season.p[6] <- ad.M26.bray.water$`Pr(>F)`[1]
+
+beta.results.bray$temp.r.squared[1] <- vegan::RsquareAdj(dbRDA.bray.M52.polyps)$r.squared
+beta.results.bray$temp.p[1] <- anova(dbRDA.bray.M52.polyps)$`Pr(>F)`[1]
+
+beta.results.bray$temp.r.squared[2] <- vegan::RsquareAdj(dbRDA.bray.M52.water)$r.squared
+beta.results.bray$temp.p[2] <- anova(dbRDA.bray.M52.water)$`Pr(>F)`[1]
+
+beta.results.bray$temp.r.squared[3] <- vegan::RsquareAdj(dbRDA.bray.M25.polyps)$r.squared
+beta.results.bray$temp.p[3] <- anova(dbRDA.bray.M25.polyps)$`Pr(>F)`[1]
+
+beta.results.bray$temp.r.squared[4] <- vegan::RsquareAdj(dbRDA.bray.M25.water)$r.squared
+beta.results.bray$temp.p[4] <- anova(dbRDA.bray.M25.water)$`Pr(>F)`[1]
+
+beta.results.bray$temp.r.squared[5] <- vegan::RsquareAdj(dbRDA.bray.M26.polyps)$r.squared
+beta.results.bray$temp.p[5] <- anova(dbRDA.bray.M26.polyps)$`Pr(>F)`[1]
+
+beta.results.bray$temp.r.squared[6] <- vegan::RsquareAdj(dbRDA.bray.M26.water)$r.squared
+beta.results.bray$temp.p[6] <- anova(dbRDA.bray.M26.water)$`Pr(>F)`[1]
+
+
+#########
+
+beta.results.jaccard <- data.frame(
+  population=rep(c("Shallow lake", "Deep lake", "River"),each=2),
+  type=rep(c("polyp","water"),3),
+  season.r.squared=NA, season.p=NA,
+  temp.r.squared=NA, temp.p=NA
+)
+beta.results.jaccard$season.r.squared[1] <- ad.M52.jaccard.polyps$R2[1]
+beta.results.jaccard$season.p[1] <- ad.M52.jaccard.polyps$`Pr(>F)`[1]
+
+beta.results.jaccard$season.r.squared[2] <- ad.M52.jaccard.water$R2[1]
+beta.results.jaccard$season.p[2] <- ad.M52.jaccard.water$`Pr(>F)`[1]
+
+beta.results.jaccard$season.r.squared[3] <- ad.M25.jaccard.polyps$R2[1]
+beta.results.jaccard$season.p[3] <- ad.M25.jaccard.polyps$`Pr(>F)`[1]
+
+beta.results.jaccard$season.r.squared[4] <- ad.M25.jaccard.water$R2[1]
+beta.results.jaccard$season.p[4] <- ad.M25.jaccard.water$`Pr(>F)`[1]
+
+beta.results.jaccard$season.r.squared[5] <- ad.M26.jaccard.polyps$R2[1]
+beta.results.jaccard$season.p[5] <- ad.M26.jaccard.polyps$`Pr(>F)`[1]
+
+beta.results.jaccard$season.r.squared[6] <- ad.M26.jaccard.water$R2[1]
+beta.results.jaccard$season.p[6] <- ad.M26.jaccard.water$`Pr(>F)`[1]
+
+beta.results.jaccard$temp.r.squared[1] <- vegan::RsquareAdj(dbRDA.jaccard.M52.polyps)$r.squared
+beta.results.jaccard$temp.p[1] <- anova(dbRDA.jaccard.M52.polyps)$`Pr(>F)`[1]
+
+beta.results.jaccard$temp.r.squared[2] <- vegan::RsquareAdj(dbRDA.jaccard.M52.water)$r.squared
+beta.results.jaccard$temp.p[2] <- anova(dbRDA.jaccard.M52.water)$`Pr(>F)`[1]
+
+beta.results.jaccard$temp.r.squared[3] <- vegan::RsquareAdj(dbRDA.jaccard.M25.polyps)$r.squared
+beta.results.jaccard$temp.p[3] <- anova(dbRDA.jaccard.M25.polyps)$`Pr(>F)`[1]
+
+beta.results.jaccard$temp.r.squared[4] <- vegan::RsquareAdj(dbRDA.jaccard.M25.water)$r.squared
+beta.results.jaccard$temp.p[4] <- anova(dbRDA.jaccard.M25.water)$`Pr(>F)`[1]
+
+beta.results.jaccard$temp.r.squared[5] <- vegan::RsquareAdj(dbRDA.jaccard.M26.polyps)$r.squared
+beta.results.jaccard$temp.p[5] <- anova(dbRDA.jaccard.M26.polyps)$`Pr(>F)`[1]
+
+beta.results.jaccard$temp.r.squared[6] <- vegan::RsquareAdj(dbRDA.jaccard.M26.water)$r.squared
+beta.results.jaccard$temp.p[6] <- anova(dbRDA.jaccard.M26.water)$`Pr(>F)`[1]
+```
+
+# Mantel test - Bray
+```{r Mantel}
+temp.dat <- sample_data(subset_samples(ps_seasonal, Type=="polyp"))
+temp.dat <- temp.dat[which(!duplicated(gsub("[0-9]*$","",temp.dat$SeqID))),]
+
+season <- temp.dat$Season
+names(season) <- row.names(temp.dat)
+season_diss <- as.matrix(outer(season, season, FUN = function(x, y) as.integer(x != y)))
+
+temperature <- temp.dat$Temp
+names(temperature) <- row.names(temp.dat)
+temperature_diss <- as.matrix(as.dist(abs(outer(temperature, temperature, FUN = "-"))))
+
+tt.m25 <- temperature_diss[grep("M25",row.names(temperature_diss)),grep("M25",colnames(temperature_diss))]
+tt.m26 <- temperature_diss[grep("M26",row.names(temperature_diss)),grep("M26",colnames(temperature_diss))]
+tt.m52 <- temperature_diss[grep("M52",row.names(temperature_diss)),grep("M52",colnames(temperature_diss))]
+
+ss.m25 <- season_diss[grep("M25",row.names(season_diss)),grep("M25",colnames(season_diss))]
+ss.m26 <- season_diss[grep("M26",row.names(season_diss)),grep("M26",colnames(season_diss))]
+ss.m52 <- season_diss[grep("M52",row.names(season_diss)),grep("M52",colnames(season_diss))]
+
+w.data <- sample_data(subset_samples(ps_seasonal, Type=="water"))
+w.mat <- as.matrix(distance(subset_samples(ps_seasonal, Type=="water"),"bray"))
+row.names(w.mat) <- gsub("W","",row.names(w.mat))
+colnames(w.mat) <- gsub("W","",colnames(w.mat))
+
+p.data <- sample_data(subset_samples(ps_seasonal, Type=="polyp"))
+p.mat <- as.matrix(distance(subset_samples(ps_seasonal, Type=="polyp"), "bray"))
+
+p.m25 <- p.mat[grep("M25",row.names(p.mat)),grep("M25",colnames(p.mat))]
+p.m26 <- p.mat[grep("M26",row.names(p.mat)),grep("M26",colnames(p.mat))]
+p.m52 <- p.mat[grep("M52",row.names(p.mat)),grep("M52",colnames(p.mat))]
+
+sites <- unique(gsub("[0-9]*$","",row.names(p.mat)))
+
+pp.mat <- matrix(NA, ncol=length(sites),nrow=length(sites), dimnames=list(sites,sites))
+
+for(i in 1:nrow(pp.mat)){
+  for(j in 1:ncol(pp.mat)){
+    row <- row.names(pp.mat)[i]
+    col <- colnames(pp.mat)[j]
+    site.mat <- p.mat[which(gsub("[0-9]*$","",row.names(p.mat))==row),which(gsub("[0-9]*$","",colnames(p.mat))==col),drop=FALSE]
+    if(identical(row, col)){
+      val<-mean(site.mat[upper.tri(site.mat)])
+    } else {
+      val<-mean(site.mat)
+    }
+    pp.mat[,which(colnames(pp.mat)==col)][which(row.names(pp.mat)==row)] <- val
+  }
+}
+
+pp.m25 <- pp.mat[grep("M25",row.names(pp.mat)),grep("M25",colnames(pp.mat))]
+pp.m26 <- pp.mat[grep("M26",row.names(pp.mat)),grep("M26",colnames(pp.mat))]
+pp.m52 <- pp.mat[grep("M52",row.names(pp.mat)),grep("M52",colnames(pp.mat))]
+
+ww.mat <- matrix(NA, ncol=length(sites),nrow=length(sites), dimnames=list(sites,sites))
+
+for(i in 1:nrow(pp.mat)){
+  for(j in 1:ncol(pp.mat)){
+    row <- row.names(ww.mat)[i]
+    col <- colnames(ww.mat)[j]
+  if(row%in%row.names(w.mat) & col%in%colnames(w.mat)){
+    ww.mat[,which(colnames(ww.mat)==col)][which(row.names(ww.mat)==row)] <- 
+      w.mat[which(row.names(w.mat)==row), which(colnames(w.mat)==col)]
+    }
+  }
+}
+
+ww.m25 <- ww.mat[grep("M25",row.names(ww.mat)),grep("M25",colnames(ww.mat))]
+ww.m26 <- ww.mat[grep("M26",row.names(ww.mat)),grep("M26",colnames(ww.mat))]
+ww.m52 <- ww.mat[grep("M52",row.names(ww.mat)),grep("M52",colnames(ww.mat))]
+
+vegan::mantel(pp.m25, ww.m25, na.rm=T)
+vegan::mantel(pp.m26, ww.m26, na.rm=T)
+vegan::mantel(pp.m52, ww.m52, na.rm=T)
+
+pmant.temp.bray.m25 <- vegan::mantel.partial(pp.m25, ww.m25, tt.m25, na.rm=T)
+pmant.temp.bray.m26 <- vegan::mantel.partial(pp.m26, ww.m26, tt.m26, na.rm=T)
+pmant.temp.bray.m52 <- vegan::mantel.partial(pp.m52, ww.m52, tt.m52, na.rm=T)
+
+pmant.season.bray.m25 <- vegan::mantel.partial(pp.m25, ww.m25, ss.m25, na.rm=T)
+pmant.season.bray.m26 <- vegan::mantel.partial(pp.m26, ww.m26, ss.m26, na.rm=T)
+pmant.season.bray.m52 <- vegan::mantel.partial(pp.m52, ww.m52, ss.m52, na.rm=T)
+
+```
+
+# Mantel test - Jaccard
+```{r Mantel}
+temp.dat <- sample_data(subset_samples(ps_seasonal, Type=="polyp"))
+temp.dat <- temp.dat[which(!duplicated(gsub("[0-9]*$","",temp.dat$SeqID))),]
+
+season <- temp.dat$Season
+names(season) <- row.names(temp.dat)
+season_diss <- as.matrix(outer(season, season, FUN = function(x, y) as.integer(x != y)))
+
+temperature <- temp.dat$Temp
+names(temperature) <- row.names(temp.dat)
+temperature_diss <- as.matrix(as.dist(abs(outer(temperature, temperature, FUN = "-"))))
+
+tt.m25 <- temperature_diss[grep("M25",row.names(temperature_diss)),grep("M25",colnames(temperature_diss))]
+tt.m26 <- temperature_diss[grep("M26",row.names(temperature_diss)),grep("M26",colnames(temperature_diss))]
+tt.m52 <- temperature_diss[grep("M52",row.names(temperature_diss)),grep("M52",colnames(temperature_diss))]
+
+ss.m25 <- season_diss[grep("M25",row.names(season_diss)),grep("M25",colnames(season_diss))]
+ss.m26 <- season_diss[grep("M26",row.names(season_diss)),grep("M26",colnames(season_diss))]
+ss.m52 <- season_diss[grep("M52",row.names(season_diss)),grep("M52",colnames(season_diss))]
+
+w.data <- sample_data(subset_samples(ps_seasonal, Type=="water"))
+w.mat <- as.matrix(distance(subset_samples(ps_seasonal, Type=="water"),"jaccard", binary=T))
+row.names(w.mat) <- gsub("W","",row.names(w.mat))
+colnames(w.mat) <- gsub("W","",colnames(w.mat))
+
+p.data <- sample_data(subset_samples(ps_seasonal, Type=="polyp"))
+p.mat <- as.matrix(distance(subset_samples(ps_seasonal, Type=="polyp"), "jaccard", binary=T))
+
+p.m25 <- p.mat[grep("M25",row.names(p.mat)),grep("M25",colnames(p.mat))]
+p.m26 <- p.mat[grep("M26",row.names(p.mat)),grep("M26",colnames(p.mat))]
+p.m52 <- p.mat[grep("M52",row.names(p.mat)),grep("M52",colnames(p.mat))]
+
+sites <- unique(gsub("[0-9]*$","",row.names(p.mat)))
+
+pp.mat <- matrix(NA, ncol=length(sites),nrow=length(sites), dimnames=list(sites,sites))
+
+for(i in 1:nrow(pp.mat)){
+  for(j in 1:ncol(pp.mat)){
+    row <- row.names(pp.mat)[i]
+    col <- colnames(pp.mat)[j]
+    site.mat <- p.mat[which(gsub("[0-9]*$","",row.names(p.mat))==row),which(gsub("[0-9]*$","",colnames(p.mat))==col),drop=FALSE]
+    if(identical(row, col)){
+      val<-mean(site.mat[upper.tri(site.mat)])
+    } else {
+      val<-mean(site.mat)
+    }
+    pp.mat[,which(colnames(pp.mat)==col)][which(row.names(pp.mat)==row)] <- val
+  }
+}
+
+pp.m25 <- pp.mat[grep("M25",row.names(pp.mat)),grep("M25",colnames(pp.mat))]
+pp.m26 <- pp.mat[grep("M26",row.names(pp.mat)),grep("M26",colnames(pp.mat))]
+pp.m52 <- pp.mat[grep("M52",row.names(pp.mat)),grep("M52",colnames(pp.mat))]
+
+ww.mat <- matrix(NA, ncol=length(sites),nrow=length(sites), dimnames=list(sites,sites))
+
+for(i in 1:nrow(pp.mat)){
+  for(j in 1:ncol(pp.mat)){
+    row <- row.names(ww.mat)[i]
+    col <- colnames(ww.mat)[j]
+  if(row%in%row.names(w.mat) & col%in%colnames(w.mat)){
+    ww.mat[,which(colnames(ww.mat)==col)][which(row.names(ww.mat)==row)] <- 
+      w.mat[which(row.names(w.mat)==row), which(colnames(w.mat)==col)]
+    }
+  }
+}
+
+ww.m25 <- ww.mat[grep("M25",row.names(ww.mat)),grep("M25",colnames(ww.mat))]
+ww.m26 <- ww.mat[grep("M26",row.names(ww.mat)),grep("M26",colnames(ww.mat))]
+ww.m52 <- ww.mat[grep("M52",row.names(ww.mat)),grep("M52",colnames(ww.mat))]
+
+vegan::mantel(pp.m25, ww.m25, na.rm=T)
+vegan::mantel(pp.m26, ww.m26, na.rm=T)
+vegan::mantel(pp.m52, ww.m52, na.rm=T)
+
+pmant.temp.jaccard.m25 <- vegan::mantel.partial(pp.m25, ww.m25, tt.m25, na.rm=T)
+pmant.temp.jaccard.m26 <- vegan::mantel.partial(pp.m26, ww.m26, tt.m26, na.rm=T)
+pmant.temp.jaccard.m52 <- vegan::mantel.partial(pp.m52, ww.m52, tt.m52, na.rm=T)
+
+pmant.season.jaccard.m25 <- vegan::mantel.partial(pp.m25, ww.m25, ss.m25, na.rm=T)
+pmant.season.jaccard.m26 <- vegan::mantel.partial(pp.m26, ww.m26, ss.m26, na.rm=T)
+pmant.season.jaccard.m52 <- vegan::mantel.partial(pp.m52, ww.m52, ss.m52, na.rm=T)
+```
+```{r}
+partial.mantel.res.bray <- data.frame(
+  pop=c("Shallow lake","Deep lake", "River"),
+  season.stat=NA, season.p=NA,
+  temp.stat=NA, temp.p=NA)
+partial.mantel.res.bray$season.stat[1] <- pmant.season.bray.m52$statistic
+partial.mantel.res.bray$season.stat[2] <- pmant.season.bray.m25$statistic
+partial.mantel.res.bray$season.stat[3] <- pmant.season.bray.m26$statistic
+
+partial.mantel.res.bray$season.p[1] <- pmant.season.bray.m52$signif
+partial.mantel.res.bray$season.p[2] <- pmant.season.bray.m25$signif
+partial.mantel.res.bray$season.p[3] <- pmant.season.bray.m26$signif
+
+partial.mantel.res.bray$temp.stat[1] <- pmant.temp.bray.m52$statistic
+partial.mantel.res.bray$temp.stat[2] <- pmant.temp.bray.m25$statistic
+partial.mantel.res.bray$temp.stat[3] <- pmant.temp.bray.m26$statistic
+
+partial.mantel.res.bray$temp.p[1] <- pmant.temp.bray.m52$signif
+partial.mantel.res.bray$temp.p[2] <- pmant.temp.bray.m25$signif
+partial.mantel.res.bray$temp.p[3] <- pmant.temp.bray.m26$signif
+
+partial.mantel.res.jaccard <- data.frame(
+  pop=c("Shallow lake","Deep lake", "River"),
+  season.stat=NA, season.p=NA,
+  temp.stat=NA, temp.p=NA)
+partial.mantel.res.jaccard$season.stat[1] <- pmant.season.jaccard.m52$statistic
+partial.mantel.res.jaccard$season.stat[2] <- pmant.season.jaccard.m25$statistic
+partial.mantel.res.jaccard$season.stat[3] <- pmant.season.jaccard.m26$statistic
+
+partial.mantel.res.jaccard$season.p[1] <- pmant.season.jaccard.m52$signif
+partial.mantel.res.jaccard$season.p[2] <- pmant.season.jaccard.m25$signif
+partial.mantel.res.jaccard$season.p[3] <- pmant.season.jaccard.m26$signif
+
+partial.mantel.res.jaccard$temp.stat[1] <- pmant.temp.jaccard.m52$statistic
+partial.mantel.res.jaccard$temp.stat[2] <- pmant.temp.jaccard.m25$statistic
+partial.mantel.res.jaccard$temp.stat[3] <- pmant.temp.jaccard.m26$statistic
+
+partial.mantel.res.jaccard$temp.p[1] <- pmant.temp.jaccard.m52$signif
+partial.mantel.res.jaccard$temp.p[2] <- pmant.temp.jaccard.m25$signif
+partial.mantel.res.jaccard$temp.p[3] <- pmant.temp.jaccard.m26$signif
+```
+
+
+# Compare distance between water and polyps samples across sampling events - BRAY-CURTIS
+```{r}
+library(tidyr); library(tibble)
+distmat.bray.M25 <- dist.bray.M25 %>% as.matrix()
+distmat.bray.M25[upper.tri(distmat.bray.M25, diag = FALSE)] <- NA
+df_distmat.bray.M25 <- as.data.frame(distmat.bray.M25) %>%
+  rownames_to_column(var = "Row") %>%
+  pivot_longer(-Row, names_to = "Column", values_to = "Value") %>%
+  filter(!is.na(Value))
+df_distmat.bray.M25$source_type <- ifelse(grepl("W",df_distmat.bray.M25$Row), "w","p")
+df_distmat.bray.M25$source_site <- substr(gsub("W","",df_distmat.bray.M25$Row),5,5)
+df_distmat.bray.M25$source_sampling <- substr(gsub("W","",df_distmat.bray.M25$Row),6,6)
+df_distmat.bray.M25$target_type <- ifelse(grepl("W",df_distmat.bray.M25$Column), "w","p")
+df_distmat.bray.M25$target_site <- substr(gsub("W","",df_distmat.bray.M25$Column),5,5)
+df_distmat.bray.M25$target_sampling <- substr(gsub("W","",df_distmat.bray.M25$Column),6,6)
+pwdist.M25 <- df_distmat.bray.M25%>%filter(source_sampling==target_sampling & source_site==target_site & source_type != target_type)
+pwdist.M25$Pop <- "Deep lake"
+
+distmat.bray.M26 <- dist.bray.M26 %>% as.matrix()
+distmat.bray.M26[upper.tri(distmat.bray.M26, diag = FALSE)] <- NA
+df_distmat.bray.M26 <- as.data.frame(distmat.bray.M26) %>%
+  rownames_to_column(var = "Row") %>%
+  pivot_longer(-Row, names_to = "Column", values_to = "Value") %>%
+  filter(!is.na(Value))
+df_distmat.bray.M26$source_type <- ifelse(grepl("W",df_distmat.bray.M26$Row), "w","p")
+df_distmat.bray.M26$source_site <- substr(gsub("W","",df_distmat.bray.M26$Row),5,5)
+df_distmat.bray.M26$source_sampling <- substr(gsub("W","",df_distmat.bray.M26$Row),6,6)
+df_distmat.bray.M26$target_type <- ifelse(grepl("W",df_distmat.bray.M26$Column), "w","p")
+df_distmat.bray.M26$target_site <- substr(gsub("W","",df_distmat.bray.M26$Column),5,5)
+df_distmat.bray.M26$target_sampling <- substr(gsub("W","",df_distmat.bray.M26$Column),6,6)
+pwdist.M26 <- df_distmat.bray.M26%>%filter(source_sampling==target_sampling & source_site==target_site & source_type != target_type)
+boxplot(pwdist.M26$Value~pwdist.M26$source_sampling)
+pwdist.M26$Pop <- "River"
+
+distmat.bray.M52 <- dist.bray.M52 %>% as.matrix()
+distmat.bray.M52[upper.tri(distmat.bray.M52, diag = FALSE)] <- NA
+df_distmat.bray.M52 <- as.data.frame(distmat.bray.M52) %>%
+  rownames_to_column(var = "Row") %>%
+  pivot_longer(-Row, names_to = "Column", values_to = "Value") %>%
+  filter(!is.na(Value))
+df_distmat.bray.M52$source_type <- ifelse(grepl("W",df_distmat.bray.M52$Row), "w","p")
+df_distmat.bray.M52$source_site <- substr(gsub("W","",df_distmat.bray.M52$Row),5,5)
+df_distmat.bray.M52$source_sampling <- substr(gsub("W","",df_distmat.bray.M52$Row),6,6)
+df_distmat.bray.M52$target_type <- ifelse(grepl("W",df_distmat.bray.M52$Column), "w","p")
+df_distmat.bray.M52$target_site <- substr(gsub("W","",df_distmat.bray.M52$Column),5,5)
+df_distmat.bray.M52$target_sampling <- substr(gsub("W","",df_distmat.bray.M52$Column),6,6)
+pwdist.M52 <- df_distmat.bray.M52%>%filter(source_sampling==target_sampling & source_site==target_site & source_type != target_type)
+pwdist.M52$Pop <- "Shallow lake"
+
+pwdist.bray <- rbind(pwdist.M25, pwdist.M26, pwdist.M52)
+pwdist.bray$Pop <- factor(pwdist.bray$Pop, levels=c("Shallow lake", "Deep lake", "River"))
+pwdist.bray$Season <- pwdist.bray$source_sampling
+pwdist.bray$Season[pwdist.bray$Season%in%c("B","F")] <- "Autumn"
+pwdist.bray$Season[pwdist.bray$Season%in%c("C","G")] <- "Winter"
+pwdist.bray$Season[pwdist.bray$Season%in%c("D","H")] <- "Spring"
+pwdist.bray$Season[pwdist.bray$Season%in%c("E","J")] <- "Summer"
+
+p1 <- ggplot(pwdist.bray, aes(x=source_sampling, y=Value, fill=Season))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  facet_wrap(~Pop, ncol=3)+  theme_bw()+
+  ylab("Distance")+xlab("Sampling")+
+  labs(title="Bray-Curtis dissimilarity of polyp and water samples")+
+  scale_x_discrete(labels=c("2021 September","2021 December","2022 March",
+                            "2022 June","2022 November","2023 February",
+                            "2023 April","2023 June"))+
+  theme(axis.text.x = element_text(angle=45,hjust=1),
+        legend.position="bottom",
+        legend.background = element_rect(color = "black", linewidth = 0.25),
+        plot.title = element_text(hjust = 0.5,face="bold"))+
+  scale_fill_manual(values=c("Spring"="lightgreen","Summer"="tan2",
+                              "Autumn"="tomato2","Winter"="steelblue3"))
+
+```
+
+# Compare distance between water and polyps samples across sampling events - JACCARD
+```{r}
+library(tidyr); library(tibble)
+distmat.jaccard.M25 <- dist.jaccard.M25 %>% as.matrix()
+distmat.jaccard.M25[upper.tri(distmat.jaccard.M25, diag = FALSE)] <- NA
+df_distmat.jaccard.M25 <- as.data.frame(distmat.jaccard.M25) %>%
+  rownames_to_column(var = "Row") %>%
+  pivot_longer(-Row, names_to = "Column", values_to = "Value") %>%
+  filter(!is.na(Value))
+df_distmat.jaccard.M25$source_type <- ifelse(grepl("W",df_distmat.jaccard.M25$Row), "w","p")
+df_distmat.jaccard.M25$source_site <- substr(gsub("W","",df_distmat.jaccard.M25$Row),5,5)
+df_distmat.jaccard.M25$source_sampling <- substr(gsub("W","",df_distmat.jaccard.M25$Row),6,6)
+df_distmat.jaccard.M25$target_type <- ifelse(grepl("W",df_distmat.jaccard.M25$Column), "w","p")
+df_distmat.jaccard.M25$target_site <- substr(gsub("W","",df_distmat.jaccard.M25$Column),5,5)
+df_distmat.jaccard.M25$target_sampling <- substr(gsub("W","",df_distmat.jaccard.M25$Column),6,6)
+pwdist.M25 <- df_distmat.jaccard.M25%>%filter(source_sampling==target_sampling & source_site==target_site & source_type != target_type)
+pwdist.M25$Pop <- "Deep lake"
+
+distmat.jaccard.M26 <- dist.jaccard.M26 %>% as.matrix()
+distmat.jaccard.M26[upper.tri(distmat.jaccard.M26, diag = FALSE)] <- NA
+df_distmat.jaccard.M26 <- as.data.frame(distmat.jaccard.M26) %>%
+  rownames_to_column(var = "Row") %>%
+  pivot_longer(-Row, names_to = "Column", values_to = "Value") %>%
+  filter(!is.na(Value))
+df_distmat.jaccard.M26$source_type <- ifelse(grepl("W",df_distmat.jaccard.M26$Row), "w","p")
+df_distmat.jaccard.M26$source_site <- substr(gsub("W","",df_distmat.jaccard.M26$Row),5,5)
+df_distmat.jaccard.M26$source_sampling <- substr(gsub("W","",df_distmat.jaccard.M26$Row),6,6)
+df_distmat.jaccard.M26$target_type <- ifelse(grepl("W",df_distmat.jaccard.M26$Column), "w","p")
+df_distmat.jaccard.M26$target_site <- substr(gsub("W","",df_distmat.jaccard.M26$Column),5,5)
+df_distmat.jaccard.M26$target_sampling <- substr(gsub("W","",df_distmat.jaccard.M26$Column),6,6)
+pwdist.M26 <- df_distmat.jaccard.M26%>%filter(source_sampling==target_sampling & source_site==target_site & source_type != target_type)
+boxplot(pwdist.M26$Value~pwdist.M26$source_sampling)
+pwdist.M26$Pop <- "River"
+
+distmat.jaccard.M52 <- dist.jaccard.M52 %>% as.matrix()
+distmat.jaccard.M52[upper.tri(distmat.jaccard.M52, diag = FALSE)] <- NA
+df_distmat.jaccard.M52 <- as.data.frame(distmat.jaccard.M52) %>%
+  rownames_to_column(var = "Row") %>%
+  pivot_longer(-Row, names_to = "Column", values_to = "Value") %>%
+  filter(!is.na(Value))
+df_distmat.jaccard.M52$source_type <- ifelse(grepl("W",df_distmat.jaccard.M52$Row), "w","p")
+df_distmat.jaccard.M52$source_site <- substr(gsub("W","",df_distmat.jaccard.M52$Row),5,5)
+df_distmat.jaccard.M52$source_sampling <- substr(gsub("W","",df_distmat.jaccard.M52$Row),6,6)
+df_distmat.jaccard.M52$target_type <- ifelse(grepl("W",df_distmat.jaccard.M52$Column), "w","p")
+df_distmat.jaccard.M52$target_site <- substr(gsub("W","",df_distmat.jaccard.M52$Column),5,5)
+df_distmat.jaccard.M52$target_sampling <- substr(gsub("W","",df_distmat.jaccard.M52$Column),6,6)
+pwdist.M52 <- df_distmat.jaccard.M52%>%filter(source_sampling==target_sampling & source_site==target_site & source_type != target_type)
+pwdist.M52$Pop <- "Shallow lake"
+
+pwdist.jaccard <- rbind(pwdist.M25, pwdist.M26, pwdist.M52)
+pwdist.jaccard$Pop <- factor(pwdist.jaccard$Pop, levels=c("Shallow lake", "Deep lake", "River"))
+pwdist.jaccard$Season <- pwdist.jaccard$source_sampling
+pwdist.jaccard$Season[pwdist.jaccard$Season%in%c("B","F")] <- "Autumn"
+pwdist.jaccard$Season[pwdist.jaccard$Season%in%c("C","G")] <- "Winter"
+pwdist.jaccard$Season[pwdist.jaccard$Season%in%c("D","H")] <- "Spring"
+pwdist.jaccard$Season[pwdist.jaccard$Season%in%c("E","J")] <- "Summer"
+
+p2 <- ggplot(pwdist.jaccard, aes(x=source_sampling, y=Value, fill=Season))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  facet_wrap(~Pop, ncol=3)+  theme_bw()+
+  ylab("Distance")+xlab("Sampling")+
+  labs(title="Jaccard presence/absence dissimilarity of polyp and water samples")+
+  scale_x_discrete(labels=c("2021 September","2021 December","2022 March",
+                            "2022 June","2022 November","2023 February",
+                            "2023 April","2023 June"))+
+  theme(axis.text.x = element_text(angle=45,hjust=1),
+        legend.position="top",
+        legend.background = element_rect(color = "black", linewidth = 0.25))+
+  scale_fill_manual(values=c("Spring"="lightgreen","Summer"="tan2",
+                              "Autumn"="tomato2","Winter"="steelblue3"))
+
+```
+
+
+# PERMANOVA
+```{r, fig.width=10, message=F, warning=F}
+pwdist.bray$Temp.SampleID <- sample_data(ps_seasonal)$SeqID[match(pwdist.bray$Column, row.names(sample_data(ps_seasonal)))]
+identical(gsub(".","_",pwdist.bray$Column,fixed=T),pwdist.bray$Temp.SampleID)
+pwdist.bray$Temp <- sample_data(ps_seasonal)$Temp[match(pwdist.bray$Column, row.names(sample_data(ps_seasonal)))]
+pwdist.bray$Season <- factor(pwdist.bray$Season, levels=c("Spring","Summer","Autumn","Winter"))
+
+pwdist.jaccard$Temp.SampleID <- sample_data(ps_seasonal)$SeqID[match(pwdist.jaccard$Column, row.names(sample_data(ps_seasonal)))]
+identical(gsub(".","_",pwdist.jaccard$Column,fixed=T),pwdist.jaccard$Temp.SampleID)
+pwdist.jaccard$Temp <- sample_data(ps_seasonal)$Temp[match(pwdist.jaccard$Column, row.names(sample_data(ps_seasonal)))]
+pwdist.jaccard$Season <- factor(pwdist.jaccard$Season, levels=c("Spring","Summer","Autumn","Winter"))
+
+m1.bray.season.m52 <- glmmTMB(Value~Season+(1|Column), data=pwdist.bray%>%filter(Pop=="Shallow lake"))
+m1.bray.season.m25 <- glmmTMB(Value~Season+(1|Column), data=pwdist.bray%>%filter(Pop=="Deep lake"))
+m1.bray.season.m26 <- glmmTMB(Value~Season+(1|Column), data=pwdist.bray%>%filter(Pop=="River"))
+
+m1.bray.temp.m52 <- glmmTMB(Value~Temp+(1|Column), data=pwdist.bray%>%filter(Pop=="Shallow lake"))
+m1.bray.temp.m25 <- glmmTMB(Value~Temp+(1|Column), data=pwdist.bray%>%filter(Pop=="Deep lake"))
+m1.bray.temp.m26 <- glmmTMB(Value~Temp+(1|Column), data=pwdist.bray%>%filter(Pop=="River"))
+
+m1.jaccard.season.m52 <- glmmTMB(Value~Season+(1|Column), data=pwdist.jaccard%>%filter(Pop=="Shallow lake"))
+m1.jaccard.season.m25 <- glmmTMB(Value~Season+(1|Column), data=pwdist.jaccard%>%filter(Pop=="Deep lake"))
+m1.jaccard.season.m26 <- glmmTMB(Value~Season+(1|Column), data=pwdist.jaccard%>%filter(Pop=="River"))
+
+m1.jaccard.temp.m52 <- glmmTMB(Value~Temp+(1|Column), data=pwdist.jaccard%>%filter(Pop=="Shallow lake"))
+m1.jaccard.temp.m25 <- glmmTMB(Value~Temp+(1|Column), data=pwdist.jaccard%>%filter(Pop=="Deep lake"))
+m1.jaccard.temp.m26 <- glmmTMB(Value~Temp+(1|Column), data=pwdist.jaccard%>%filter(Pop=="River"))
+
+d1 <- ggplot(pwdist.bray, aes(x=Temp, y=Value,fill=Season))+
+  geom_point(shape=21, colour="grey30",size=3)+
+  facet_wrap(~Pop)+labs(title="Bray-Curtis index")+
+  ylab("Dissimilarity")+xlab("Temperature (°C)")+theme_bw()+
+  scale_fill_manual(values=c("Spring"="lightgreen","Summer"="tan2",
+                              "Autumn"="tomato2","Winter"="steelblue3"))
+d2 <- ggplot(pwdist.jaccard, aes(x=Temp, y=Value, fill=Season))+
+  geom_point(shape=21, colour="grey30",size=3)+
+  facet_wrap(~Pop)+labs(title="Jaccard presence-absence index")+
+  ylab("Dissimilarity")+xlab("Temperature (°C)")+theme_bw()+
+  scale_fill_manual(values=c("Spring"="lightgreen","Summer"="tan2",
+                              "Autumn"="tomato2","Winter"="steelblue3"))
+
+ragg::agg_tiff(filename="/storage/microbiome/seasonal_2024/figs/pw_diss.tiff",
+               width=8, height=8,units="in",res=300, scaling=0.9)
+ggarrange(d1,d2,ncol=1,labels="AUTO",common.legend=T)
+dev.off()
+```
+
+#Upset plot
+
+```{r}
+library(MicrobiotaProcess); library(ComplexUpset); library(UpSetR); library(ComplexHeatmap)
+
+sample_groups <- c("2021 September polyp","2021 September water",
+                  "2021 December polyp","2021 December water",
+                  "2022 March polyp","2022 March water",
+                  "2022 June polyp","2022 June water",
+                  "2022 November polyp","2022 November water",
+                  "2023 February polyp","2023 February water",
+                  "2023 April polyp","2023 April water",
+                  "2023 June polyp","2023 June water")
+
+sample_data(ps_seasonal)$SamplingType <- paste(sample_data(ps_seasonal)$Sampling,
+                                               sample_data(ps_seasonal)$Type, sep=" ")
+upset_datM52 <- get_upset(subset_samples(ps_seasonal, PopID=="Shallow lake"),
+          factorNames="SamplingType",threshold=2)%>%select(!"2021 June polyp")
+
+m <- make_comb_mat(upset_datM52,mode="intersect")
+m2 <- m[,which(comb_name(m)%in%
+c("1100000000000000","0011000000000000","0000110000000000","0000001100000000",
+"0000000011000000","0000000000110000","0000000000001100","0000000000000011"))]
+
+set.order <- match(names(set_size(m2)), sample_groups)
+comb.order <- order(comb_degree(m2), -comb_size(m2))
+
+ht_opt$TITLE_PADDING = unit(c(8.5, 8.5), "points")
+u1 <- UpSet(m2,
+      comb_col=c("steelblue3","tomato2","tan2","lightgreen",
+                   "tomato2","lightgreen","steelblue3","tan2"),
+      comb_order = comb.order,
+      set_order=set.order, row_names_gp=gpar(fontsize=8),
+      top_annotation = upset_top_annotation(m2, 
+      annotation_name_rot = 90,
+      annotation_name_offset = unit(10,"mm"),
+      axis_param = list(gp = gpar(fontsize = 10)), 
+      gp = gpar(col = "black",
+                fill=c("steelblue3","tomato2","tan2","lightgreen",
+                   "tomato2","lightgreen","steelblue3","tan2"))),
+      column_title="Shallow lake",
+      column_title_gp = gpar(fill = "grey85", col = "black", border = "black")
+      )
+
+## M25
+upset_datM25 <- get_upset(subset_samples(ps_seasonal, PopID=="Deep lake"),
+          factorNames="SamplingType",threshold=2)%>%select(!"2021 June polyp")
+
+m <- make_comb_mat(upset_datM25,mode="intersect")
+m2 <- m[,which(comb_name(m)%in%
+c("1100000000000000","0011000000000000","0000110000000000","0000001100000000",
+"0000000011000000","0000000000110000","0000000000001100","0000000000000011"))]
+
+set.order <- match(names(set_size(m2)), sample_groups)
+comb.order <- order(comb_degree(m2), -comb_size(m2))
+
+u2 <- UpSet(m2,
+      comb_col=c("steelblue3","tomato2","tan2","lightgreen",
+                   "tomato2","lightgreen","steelblue3","tan2"),
+      comb_order = comb.order,
+      set_order=set.order,
+      top_annotation = upset_top_annotation(m2, 
+      annotation_name_rot = 90,
+      annotation_name_offset = unit(10,"mm"),
+      axis_param = list(gp = gpar(fontsize = 10)), 
+      gp = gpar(col = "black",
+                fill=c("steelblue3","tomato2","tan2","lightgreen",
+                   "tomato2","lightgreen","steelblue3","tan2"))),
+      column_title="Deep lake",
+      column_title_gp = gpar(fill = "grey85", col = "black", border = "black")
+      ) 
+
+## M26
+upset_datM26 <- get_upset(subset_samples(ps_seasonal, PopID=="River"),
+          factorNames="SamplingType",threshold=2)%>%
+  select(!"2021 June polyp")
+upset_datM26$"2021 December water" <- 0
+upset_datM26$"2021 September water" <- 0
+upset_datM26$"2023 February water" <- 0
+
+upset_datM26 <- upset_datM26[,c(1,14,2,15,3:10,11,16,12:13)]
+         #&!"2021 December polyp"&!"2021 September polyp"&!"2023 February polyp")
+
+m <- make_comb_mat(upset_datM26,mode="intersect")
+m2 <- m[,which(comb_name(m)%in%
+c("1100000000000000","0011000000000000","0000110000000000","0000001100000000",
+"0000000011000000","0000000000110000","0000000000001100","0000000000000011"))]
+
+set.order <- match(names(set_size(m2)), sample_groups)
+comb.order <- order(comb_degree(m2), -comb_size(m2))
+
+u3 <- UpSet(m2,
+      comb_col=c("steelblue3","tomato2","tan2","lightgreen",
+                   "tomato2","lightgreen","steelblue3","tan2"),
+      comb_order = comb.order,
+      set_order=set.order,
+      top_annotation = upset_top_annotation(m2, 
+      annotation_name_rot = 90,
+      annotation_name_offset = unit(10,"mm"),
+      axis_param = list(gp = gpar(fontsize = 10)),
+      gp = gpar(col = "black",
+                fill=c("steelblue3","tomato2","tan2","lightgreen",
+                   "tomato2","lightgreen","steelblue3","tan2"))),
+      column_title="River",
+      column_title_gp = gpar(fill = "grey85", col = "black", border = "black")
+      )
+ht_grob <- grid::grid.grabExpr(
+  draw(u1+u2+u3, column_title="No. of co-occurring bacterial taxa in polyp and water samples",
+       column_title_gp=gpar(font=2),
+       padding = unit(c(2, 5, 2, 2), "mm"))
+)
+ragg::agg_tiff(filename="/storage/microbiome/seasonal_2024/figs/pw.tiff",
+               width=10, height=8,units="in",res=300, scaling=0.8)
+ggarrange(ht_grob,p1,ncol=1,labels="AUTO")
+dev.off()
+```
+
+
+# Differential abundance analysis with temperature on polyps
+```{r, fig.width=10, fig.height=10, message=F, warning=F, eval=T}
+library(EnhancedVolcano); library(tibble)
+
+polyps <- subset_samples(ps_seasonal, Type=="polyp")
+polypsM25 <- subset_samples(polyps, PopID=="Deep lake")
+polypsM26 <- subset_samples(polyps, PopID=="River")
+polypsM52 <- subset_samples(polyps, PopID=="Shallow lake")
+
+load("/storage/microbiome/seasonal_2024/polyp_ancom_results.Rdata")
+#temp.ancom <- ancombc2(polyps, fix_formula = "Temp", tax_level="Genus",p_adj_method = "BH")
+#polyp.temp.ancom.M25 <- ancombc2(polypsM25, fix_formula = "Temp", tax_level="Genus",p_adj_method = "BH")
+#polyp.temp.ancom.M26 <- ancombc2(polypsM26, fix_formula = "Temp", tax_level="Genus",p_adj_method = "BH")
+#polyp.temp.ancom.M52 <- ancombc2(polypsM52, fix_formula = "Temp", tax_level="Genus",p_adj_method = "BH")
+save(polyp.temp.ancom.M25, polyp.temp.ancom.M26, polyp.temp.ancom.M52,
+     file="/storage/microbiome/seasonal_2024/polyp_ancom_results.Rdata")
+
+daa.M25 <- polyp.temp.ancom.M25$res%>%column_to_rownames("taxon")
+daa.M26 <- polyp.temp.ancom.M26$res%>%column_to_rownames("taxon")
+daa.M52 <- polyp.temp.ancom.M52$res%>%column_to_rownames("taxon")
+
+keyvals.colour.M52 <- ifelse(
+    daa.M52$lfc_Temp < -0.05 & daa.M52$q_Temp<0.01, 'royalblue',
+      ifelse(daa.M52$lfc_Temp > 0.05 & daa.M52$q_Temp<0.01, 'red2',
+        'black'))
+keyvals.colour.M52[is.na(keyvals.colour.M52)] <- 'black'
+names(keyvals.colour.M52)[keyvals.colour.M52 == 'red2'] <- 'warm-specific'
+names(keyvals.colour.M52)[keyvals.colour.M52 == 'black'] <- 'non-specific'
+names(keyvals.colour.M52)[keyvals.colour.M52 == 'royalblue'] <- 'cold-specific'
+
+keyvals.colour.M25 <- ifelse(
+    daa.M25$lfc_Temp < -0.05 & daa.M25$q_Temp<0.01, 'royalblue',
+      ifelse(daa.M25$lfc_Temp > 0.05 & daa.M25$q_Temp<0.01, 'red2',
+        'black'))
+keyvals.colour.M25[is.na(keyvals.colour.M25)] <- 'black'
+names(keyvals.colour.M25)[keyvals.colour.M25 == 'red2'] <- 'warm-specific'
+names(keyvals.colour.M25)[keyvals.colour.M25 == 'black'] <- 'non-specific'
+names(keyvals.colour.M25)[keyvals.colour.M25 == 'royalblue'] <- 'cold-specific'
+
+keyvals.colour.M26 <- ifelse(
+    daa.M26$lfc_Temp < -0.05 & daa.M26$q_Temp<0.01, 'royalblue',
+      ifelse(daa.M26$lfc_Temp > 0.05 & daa.M26$q_Temp<0.01, 'red2',
+        'black'))
+keyvals.colour.M26[is.na(keyvals.colour.M26)] <- 'black'
+names(keyvals.colour.M26)[keyvals.colour.M26 == 'red2'] <- 'warm-specific'
+names(keyvals.colour.M26)[keyvals.colour.M26 == 'black'] <- 'non-specific'
+names(keyvals.colour.M26)[keyvals.colour.M26 == 'royalblue'] <- 'cold-specific'
+
+polyp.v1 <- EnhancedVolcano(daa.M52, lab=rownames(daa.M52), x="lfc_Temp", y="q_Temp", 
+                FCcutoff=0.05, pCutoff=0.01, drawConnectors = T,
+                colCustom = keyvals.colour.M52,max.overlaps=15,
+                xlab=bquote(~beta [Temperature]),labSize=4,
+                title="Polyps - Shallow lake", subtitle=NULL,caption=NULL)+ xlim(-0.4,0.5)+ylim(0,8)
+polyp.v2 <- EnhancedVolcano(daa.M25, lab=rownames(daa.M25), x="lfc_Temp", y="q_Temp", 
+                FCcutoff=0.05, pCutoff=0.01, drawConnectors = T,
+                colCustom = keyvals.colour.M25,max.overlaps=15,
+                xlab=bquote(~beta [Temperature]),labSize=4,
+                title="Polyps - Deep lake",subtitle=NULL,caption=NULL)+ xlim(-0.4,0.5)+ylim(0,8)
+polyp.v3 <- EnhancedVolcano(daa.M26, lab=rownames(daa.M26), x="lfc_Temp", y="q_Temp", 
+                FCcutoff=0.05, pCutoff=0.01, drawConnectors = T,
+                colCustom = keyvals.colour.M26,max.overlaps=15,
+                xlab=bquote(~beta [Temperature]),labSize=4,
+                title="Polyps - River",subtitle=NULL,caption=NULL)+xlim(-0.4,0.5)+ylim(0,8)
+
+ragg::agg_tiff(filename="/storage/microbiome/seasonal_2024/figs/polyp_daa.tiff",
+               width=6, height=8,units="in",res=300, scaling=0.6)
+ggarrange(polyp.v1+theme(plot.margin = unit(c(0.1,0.1,0.1,0.1), "cm"),
+                   legend.position = "top"),
+          polyp.v2+theme(plot.margin = unit(c(0.1,0.1,0.1,0.1), "cm"),
+                   legend.position = "top"),
+          polyp.v3+theme(plot.margin = unit(c(0.1,0.1,0.1,0.1), "cm"),
+                   legend.position = "top"), ncol=1,common.legend = T)
+dev.off()
+```
+
+# Differential abundance analysis with temperature on water
+```{r, fig.width=10, fig.height=10, message=F, warning=F, eval=T}
+library(EnhancedVolcano); library(tibble)
+
+water <- subset_samples(ps_seasonal, Type=="water")
+waterM25 <- subset_samples(water, PopID=="Deep lake")
+waterM26 <- subset_samples(water, PopID=="River")
+waterM52 <- subset_samples(water, PopID=="Shallow lake")
+
+load("/storage/microbiome/seasonal_2024/water_ancom_results.Rdata")
+#temp.ancom <- ancombc2(polyps, fix_formula = "Temp", tax_level="Genus",p_adj_method = "BH")
+#water.temp.ancom.M25 <- ancombc2(waterM25, fix_formula = "Temp", tax_level="Genus",p_adj_method = "BH")
+#water.temp.ancom.M26 <- ancombc2(waterM26, fix_formula = "Temp", tax_level="Genus",p_adj_method = "BH")
+#water.temp.ancom.M52 <- ancombc2(waterM52, fix_formula = "Temp", tax_level="Genus",p_adj_method = "BH")
+save(water.temp.ancom.M25, water.temp.ancom.M26, water.temp.ancom.M52,
+     file="/storage/microbiome/seasonal_2024/water_ancom_results.Rdata")
+
+daa.M25 <- water.temp.ancom.M25$res%>%column_to_rownames("taxon")
+daa.M26 <- water.temp.ancom.M26$res%>%column_to_rownames("taxon")
+daa.M52 <- water.temp.ancom.M52$res%>%column_to_rownames("taxon")
+
+keyvals.colour.M52 <- ifelse(
+    daa.M52$lfc_Temp < -0.05 & daa.M52$q_Temp<0.01, 'royalblue',
+      ifelse(daa.M52$lfc_Temp > 0.05 & daa.M52$q_Temp<0.01, 'red2',
+        'black'))
+keyvals.colour.M52[is.na(keyvals.colour.M52)] <- 'black'
+names(keyvals.colour.M52)[keyvals.colour.M52 == 'red2'] <- 'warm-specific'
+names(keyvals.colour.M52)[keyvals.colour.M52 == 'black'] <- 'non-specific'
+names(keyvals.colour.M52)[keyvals.colour.M52 == 'royalblue'] <- 'cold-specific'
+
+keyvals.colour.M25 <- ifelse(
+    daa.M25$lfc_Temp < -0.05 & daa.M25$q_Temp<0.01, 'royalblue',
+      ifelse(daa.M25$lfc_Temp > 0.05 & daa.M25$q_Temp<0.01, 'red2',
+        'black'))
+keyvals.colour.M25[is.na(keyvals.colour.M25)] <- 'black'
+names(keyvals.colour.M25)[keyvals.colour.M25 == 'red2'] <- 'warm-specific'
+names(keyvals.colour.M25)[keyvals.colour.M25 == 'black'] <- 'non-specific'
+names(keyvals.colour.M25)[keyvals.colour.M25 == 'royalblue'] <- 'cold-specific'
+
+keyvals.colour.M26 <- ifelse(
+    daa.M26$lfc_Temp < -0.05 & daa.M26$q_Temp<0.01, 'royalblue',
+      ifelse(daa.M26$lfc_Temp > 0.05 & daa.M26$q_Temp<0.01, 'red2',
+        'black'))
+keyvals.colour.M26[is.na(keyvals.colour.M26)] <- 'black'
+names(keyvals.colour.M26)[keyvals.colour.M26 == 'red2'] <- 'warm-specific'
+names(keyvals.colour.M26)[keyvals.colour.M26 == 'black'] <- 'non-specific'
+names(keyvals.colour.M26)[keyvals.colour.M26 == 'royalblue'] <- 'cold-specific'
+
+water.v1 <- EnhancedVolcano(daa.M52, lab=rownames(daa.M52), x="lfc_Temp", y="q_Temp", 
+                FCcutoff=0.05, pCutoff=0.01, drawConnectors = T,
+                colCustom = keyvals.colour.M52,max.overlaps=15,
+                xlab=bquote(~beta [Temperature]),labSize=4,
+                title="Water - Shallow lake",subtitle=NULL,caption=NULL)+ xlim(-0.4,0.5)+ylim(0,8)
+water.v2 <- EnhancedVolcano(daa.M25, lab=rownames(daa.M25), x="lfc_Temp", y="q_Temp", 
+                FCcutoff=0.05, pCutoff=0.01, drawConnectors = T,
+                colCustom = keyvals.colour.M25,max.overlaps=15,
+                xlab=bquote(~beta [Temperature]),labSize=4,
+                title="Water - Deep lake",subtitle=NULL,caption=NULL)+ xlim(-0.4,0.5)+ylim(0,8)
+water.v3 <- EnhancedVolcano(daa.M26, lab=rownames(daa.M26), x="lfc_Temp", y="q_Temp", 
+                FCcutoff=0.05, pCutoff=0.01, drawConnectors = T,
+                colCustom = keyvals.colour.M26,max.overlaps=15,
+                xlab=bquote(~beta [Temperature]),labSize=4,
+                title="Water - River",subtitle=NULL,caption=NULL)+xlim(-0.4,0.5)+ylim(0,8)
+
+ragg::agg_tiff(filename="/storage/microbiome/seasonal_2024/figs/water_daa.tiff",
+               width=6, height=8,units="in",res=300, scaling=0.6)
+ggarrange(water.v1+theme(plot.margin = unit(c(0.1,0.1,0.1,0.1), "cm"),
+                   legend.position = "top"),
+          water.v2+theme(plot.margin = unit(c(0.1,0.1,0.1,0.1), "cm"),
+                   legend.position = "top"),
+          water.v3+theme(plot.margin = unit(c(0.1,0.1,0.1,0.1), "cm"),
+                   legend.position = "top"), ncol=1,common.legend = T)
+dev.off()
+```
+
+```{r}
+ragg::agg_tiff(filename="/storage/microbiome/seasonal_2024/figs/daa.tiff",
+               width=10, height=8,units="in",res=300, scaling=0.6)
+ggarrange(polyp.v1+theme(plot.margin = unit(c(0.1,0.1,0.1,0.1), "cm"),
+                   legend.position = "top"),
+          water.v1+theme(plot.margin = unit(c(0.1,0.1,0.1,0.1), "cm"),
+                   legend.position = "top"),
+          polyp.v2+theme(plot.margin = unit(c(0.1,0.1,0.1,0.1), "cm"),
+                   legend.position = "top"),
+          water.v2+theme(plot.margin = unit(c(0.1,0.1,0.1,0.1), "cm"),
+                   legend.position = "top"),
+          polyp.v3+theme(plot.margin = unit(c(0.1,0.1,0.1,0.1), "cm"),
+                   legend.position = "top"),
+          water.v3+theme(plot.margin = unit(c(0.1,0.1,0.1,0.1), "cm"),
+                   legend.position = "top"), ncol=2,nrow=3,common.legend = T)
+dev.off()
+```
+
+#Stochasticity of microbial communities with NST
+```{r, fig.width=8, fig.height=12, eval=F}
+library(NST)
+comm.M25 <- t(otu_table(polypsM25))
+group.M25 <- sample_data(polypsM25)%>%data.frame()%>%select("Sampling")
+
+nst.M25 <- tNST(comm.M25, group.M25, meta.group=NULL, meta.com=NULL,
+          dist.method="bray", abundance.weighted=TRUE, rand=1000,
+          output.rand=FALSE, nworker=8, LB=FALSE, null.model="PF",
+          between.group=TRUE, SES=TRUE, RC=TRUE)
+nst.M25.between <- nst.M25$index.between%>%filter(group%in%c("2021 June.vs.2021 September",
+                                          "2021 September.vs.2021 December",
+                                          "2021 December.vs.2022 March",
+                                          "2022 March.vs.2022 June",
+                                          "2022 June.vs.2022 November",
+                                          "2022 November.vs.2023 February",
+                                          "2023 February.vs.2023 April",
+                                          "2023 April.vs.2023 June"))
+nst.M25.between$group <- factor(nst.M25.between$group, 
+                                levels=unique(nst.M25.between$group))
+nst.plot.M25 <- ggplot(nst.M25.between, aes(x=group, y=NST.i.bray*100, group=1))+geom_point()+geom_line()+
+  theme_bw()+geom_hline(yintercept=50, linetype="dashed", color="blue")+
+  ylim(0,100)+ylab("NST (%)")+labs(title="Population M25")+
+  annotate("text", x=1.5, y =90, label = "Stochastic processes", vjust = 0, color = "blue")+
+  annotate("text", x=1.5, y = 5, label = "Deterministic processes", vjust = 0, color = "blue") +
+  theme(axis.text.x = element_text(angle=45,hjust=1))
+
+comm.M26 <- t(otu_table(polypsM26))
+group.M26 <- sample_data(polypsM26)%>%data.frame()%>%select("Sampling")
+
+nst.M26 <- tNST(comm.M26, group.M26, meta.group=NULL, meta.com=NULL,
+          dist.method="bray", abundance.weighted=TRUE, rand=1000,
+          output.rand=FALSE, nworker=8, LB=FALSE, null.model="PF",
+          between.group=TRUE, SES=TRUE, RC=TRUE)
+nst.M26.between <- nst.M26$index.between%>%filter(group%in%c("2021 June.vs.2021 September",
+                                          "2021 September.vs.2021 December",
+                                          "2021 December.vs.2022 March",
+                                          "2022 March.vs.2022 June",
+                                          "2022 June.vs.2022 November",
+                                          "2022 November.vs.2023 February",
+                                          "2023 February.vs.2023 April",
+                                          "2023 April.vs.2023 June"))
+nst.M26.between$group <- factor(nst.M26.between$group, 
+                                levels=unique(nst.M26.between$group))
+nst.plot.M26 <- ggplot(nst.M26.between, aes(x=group, y=NST.i.bray*100, group=1))+geom_point()+geom_line()+
+  theme_bw()+geom_hline(yintercept=50, linetype="dashed", color="blue")+
+  ylim(0,100)+ylab("NST (%)")+labs(title="Population M26")+
+  annotate("text", x=1.5, y = 90, label = "Stochastic processes", vjust = 0, color = "blue")+
+  annotate("text", x=1.5, y = 5, label = "Deterministic processes", vjust = 0, color = "blue") +
+  theme(axis.text.x = element_text(angle=45,hjust=1))
+
+comm.M52 <- t(otu_table(polypsM52))
+group.M52 <- sample_data(polypsM52)%>%data.frame()%>%select("Sampling")
+
+nst.M52 <- tNST(comm.M52, group.M52, meta.group=NULL, meta.com=NULL,
+          dist.method="bray", abundance.weighted=TRUE, rand=1000,
+          output.rand=TRUE, nworker=8, LB=FALSE, null.model="PF",
+          between.group=TRUE, SES=TRUE, RC=TRUE)
+nst.M52.between <- nst.M52$index.between%>%filter(group%in%c("2021 June.vs.2021 September",
+                                          "2021 September.vs.2021 December",
+                                          "2021 December.vs.2022 March",
+                                          "2022 March.vs.2022 June",
+                                          "2022 June.vs.2022 November",
+                                          "2022 November.vs.2023 February",
+                                          "2023 February.vs.2023 April",
+                                          "2023 April.vs.2023 June"))
+nst.M52.between$group <- factor(nst.M52.between$group, 
+                                levels=unique(nst.M52.between$group))
+nst.plot.M52 <- ggplot(nst.M52.between, aes(x=group, y=NST.i.bray*100, group=1))+geom_point()+geom_line()+
+  theme_bw()+geom_hline(yintercept=50, linetype="dashed", color="blue")+
+  ylim(0,100)+ylab("NST (%)")+labs(title="Population M52")+
+  annotate("text", x=1.5, y = 90, label = "Stochastic processes", vjust = 0, color = "blue")+
+  annotate("text", x=1.5, y = 5, label = "Deterministic processes", vjust = 0, color = "blue") +
+  theme(axis.text.x = element_text(angle=45,hjust=1))
+
+ggpubr::ggarrange(nst.plot.M25, nst.plot.M26, nst.plot.M52, ncol=1)
+```
+
+
+```{r, fig.width=10, message=T, warning=T, eval=F}
+#samplings <- unique(sample_data(ps_seasonal)$Sampling)
+#props_spring <- list()
+#for(i in 1:length(samplings)){
+#  print(i)
+#  ps_sel <- subset_samples(ps_seasonal,Sampling==samplings[i]&Type=="polyp")
+
+  ps_sel <- subset_samples(ps_seasonal, Type=="polyp")
+  taxa_names(ps_sel) <- tax_table(ps_sel)[,6]
+
+  sel_tax <- top_taxa(subset_samples(ps_sel, Type=="polyp"),n=50)$top_taxa[,2]
+
+  ps_sel <- subset_taxa(ps_sel, Genus%in%sel_tax)
+  print(ps_sel)
+
+  net_spring <- netConstruct(data = ps_sel,
+                           measure = "spring",
+                           measurePar = list(nlambda=50, 
+                                             rep.num=50),
+                           normMethod = "none", 
+                           zeroMethod = "none",
+                           sparsMethod = "none", 
+                           dissFunc = "signed",
+                           verbose = 2,
+                           seed = 123456)
+
+  props_spring <- netAnalyze(net_spring, 
+                           centrLCC = TRUE,
+                           clustMethod = "cluster_fast_greedy",
+                           hubPar = "eigenvector",
+                           weightDeg = FALSE, normDeg = FALSE)
+#}
+
+p <- plot(props_spring, 
+          nodeColor = "cluster", 
+          nodeSize = "eigenvector",
+          nodeSizeSpread = 2,
+          cexNodes = 4,
+          showTitle = FALSE,
+          labelScale = TRUE,
+          cexLabels = 5)
+
+save(net_spring, props_spring, file="/storage/microbiome/seasonal_2024/net100.Rdata")
+
+```
+
+
+```{r, fig.width=10, fig.height=10, message=F, warning=F, eval=F}
+library(igraph); library(tidygraph); library(ggraph); library(ggforce); 
+library(scatterpie); library(grafify); library(ggnewscale)
+
+load("/storage/microbiome/seasonal_2024/net100.Rdata")
+
+plot_graph <- as_tbl_graph(graph_from_adjacency_matrix(net_spring$adjaMat1,weighted=T,mode="undirected"))
+
+node.list <- plot_graph%>%activate(nodes)%>%data.frame()%>%as.vector()
+node.data <- data.frame(node=node.list$name,
+                        Cluster=as.factor(props_spring$clustering$clust1[node.list$name]),
+                        polyp.abund=taxa_sums(subset_samples(ps_sel, Type=="polyp"))[node.list$name],
+                        spring.abund=taxa_sums(subset_samples(ps_sel, Season=="Spring"))[node.list$name],
+                        summer.abund=taxa_sums(subset_samples(ps_sel, Season=="Summer"))[node.list$name],
+                        autumn.abund=taxa_sums(subset_samples(ps_sel, Season=="Autumn"))[node.list$name],
+                        winter.abund=taxa_sums(subset_samples(ps_sel, Season=="Winter"))[node.list$name])
+                        
+plot_graph <- plot_graph%>%activate(nodes)%>%left_join(node.data, by=c("name"="node"))
+
+V(plot_graph)$p <- taxa_sums(subset_samples(ps_sel, Type=="polyp"))[node.list$name]
+V(plot_graph)$grp <- props_spring$clustering$clust1[node.list$name]
+
+set.seed(123)
+xy <- layout_with_kk(plot_graph)#, weights=0.1*E(plot_graph2)$weight)
+V(plot_graph)$x <- xy[,1]
+V(plot_graph)$y <- xy[,2]
+V(plot_graph)$Cluster <- as.factor(V(plot_graph)$grp)
+plot_graph2 <- as_tbl_graph(plot_graph)
+
+net <- ggraph(plot_graph2, "manual", x = V(plot_graph)$x, y = V(plot_graph)$y)+
+  geom_edge_fan(color="grey90")+theme_graph()+
+#  geom_mark_hull(aes(x,y,group=Cluster,fill=Cluster),
+#                       concavity=8,alpha=0.25,linetype=2)+
+  scale_fill_grafify(name="Cluster:",palette="fishy")+
+  scale_color_grafify(name="Cluster:",palette="fishy")+
+#  new_scale_fill()+
+  geom_node_point(aes(color=Cluster, size=log10(polyp.abund)))+
+  scale_size_continuous(range=c(1,10))+    
+#  scale_fill_manual(name="Type:",values=c("w"="lightblue3","p"="orange"),
+#                    labels=c("w"="water","p"="polyp"))+
+  geom_node_text(aes(label=ifelse(polyp.abund > quantile(polyp.abund,0.5), 
+                                  as.character(name), NA_character_),
+                    # size=2*log10(polyp.abund)
+                     ),
+                 repel=T,force=25,force_pull=0)+guides(size="none")
+net
+```
